@@ -7,6 +7,7 @@ import type { PlayerSourceOption } from './useTmdbPlayback'
 import {
   compareProbeResults,
   probePlayback,
+  readResolveProbe,
   type PlaybackProbeResult,
 } from '@/shared/lib/playbackProbe'
 
@@ -40,6 +41,7 @@ const MAX_CONCURRENT = 3
  * 播放页换源候选 + 真实吞吐测速：
  * - TMDB 路由直接使用已匹配的源；直连路由按片名跨源搜索同名资源（标题匹配档位 ≤2 才入选）
  * - 对每个候选源实测第一集真实分片吞吐（浏览器直连，与搜索结果卡片同一套测速口径）
+ * - 直达播放解析页已测过的源直接复用其结果（readResolveProbe），只补测没测过的
  * - 返回按吞吐余量排列的候选列表，测速结果到达后自动重排
  *
  * 注意副作用顺序：重置必须最先声明（标题/路由变化时先清状态），
@@ -153,7 +155,7 @@ export function useSourceSpeedOptions({
     return list
   }, [isTmdbRoute, tmdbOptions, currentOption, discovered])
 
-  // 真实吞吐探测：取详情第一集地址，实下约 1MB 分片量吞吐（结果按源 code 记录，幂等）
+  // 真实吞吐探测：取详情第一集地址，实下约 256KB 分片量吞吐（结果按源 code 记录，幂等）
   const runProbe = useCallback(async (option: PlayerSourceOption) => {
     const finish = (result: PlaybackProbeResult | null) => {
       doneRef.current.add(option.sourceCode)
@@ -199,15 +201,32 @@ export function useSourceSpeedOptions({
     }
   }, [runProbe])
 
-  // ③ 候选出现后排队探测（每个源只测一次）
+  // 直达播放解析页已测过的源直接灌入结果：进页即有现成测速，不必从零重测
+  const seedFromResolveCache = useCallback((option: PlayerSourceOption): boolean => {
+    if (!option.bestVodId) return false
+    const cached = readResolveProbe(option.sourceCode, option.bestVodId)
+    if (!cached) return false
+    doneRef.current.add(option.sourceCode)
+    probeRef.current.set(option.sourceCode, cached.probe)
+    setProbedCodes(new Set(doneRef.current))
+    setProbes(new Map(probeRef.current))
+    if (cached.probe.qualityLabel) {
+      qualityRef.current.set(option.sourceCode, cached.probe.qualityLabel)
+      setQualities(new Map(qualityRef.current))
+    }
+    return true
+  }, [])
+
+  // ③ 候选出现后排队探测（每个源只测一次；解析页测过的直接用缓存）
   useEffect(() => {
     for (const option of baseOptions) {
       if (enqueuedRef.current.has(option.sourceCode)) continue
       enqueuedRef.current.add(option.sourceCode)
+      if (seedFromResolveCache(option)) continue
       queueRef.current.push(option)
     }
     pumpQueue()
-  }, [baseOptions, pumpQueue])
+  }, [baseOptions, pumpQueue, seedFromResolveCache])
 
   const options = useMemo(() => {
     const sorted = [...baseOptions]

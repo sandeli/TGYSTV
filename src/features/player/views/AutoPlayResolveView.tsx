@@ -9,8 +9,10 @@ import { getTitleMatchTier } from '@/features/search/hooks/directSearch.utils'
 import { buildDoubanSearchPath } from '@/shared/lib/douban'
 import { buildCmsPlayPath } from '@/shared/lib/routes'
 import {
+  cacheResolveProbes,
   compareProbeResults,
   probePlayback,
+  type CachedSourceProbe,
   type PlaybackProbeResult,
 } from '@/shared/lib/playbackProbe'
 
@@ -34,6 +36,8 @@ export interface AutoPlayCandidate {
   vodId: string
   tier: number
   probe: PlaybackProbeResult | null
+  /** 探测时取到的第一集地址，随测速结果一起缓存给播放页换源面板复用 */
+  episodeUrl?: string
 }
 
 /** 候选排序：档位优先，其次按真实吞吐测速口径（纯函数，可测） */
@@ -131,6 +135,14 @@ export default function AutoPlayResolveView() {
       finished = true
       const best = pickBestCandidate(candidates)
       if (best) {
+        // 把已测候选的测速结果缓存给播放页换源面板：进页即有现成数据，不必从零重测
+        const probedEntries = new Map<string, CachedSourceProbe>()
+        for (const c of candidates) {
+          if (c.probe && c.episodeUrl) {
+            probedEntries.set(`${c.sourceId}:${c.vodId}`, { probe: c.probe, episodeUrl: c.episodeUrl })
+          }
+        }
+        if (probedEntries.size > 0) cacheResolveProbes(probedEntries)
         // 选源交代：让用户（和排障）一眼看出解析页选出了哪个源、测速多少
         toast.success(
           `已为你选源：${best.sourceName}${best.probe ? ` · 起播 ${best.probe.startupMs} ms · 吞吐 ${best.probe.throughputMbps} Mbps` : ' · 未测得速度'}`,
@@ -163,6 +175,7 @@ export default function AutoPlayResolveView() {
         const detail = await cmsClient.getDetail(candidate.vodId, source)
         const episodeUrl = detail.episodes?.[0]
         if (!detail.success || !episodeUrl) return
+        candidate.episodeUrl = episodeUrl
         // 真实分片吞吐测速（自带 10 秒预算）；失败保持 probe=null，排序时排后面
         candidate.probe = await probePlayback(episodeUrl)
       } catch {

@@ -1,9 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
+  cacheResolveProbes,
   compareProbeResults,
   estimateBitrateMbps,
   parseHlsPlaylist,
   probePlayback,
+  readResolveProbe,
+  type CachedSourceProbe,
   type PlaybackProbeResult,
 } from './playbackProbe'
 
@@ -170,5 +173,27 @@ describe('probePlayback（mock 网络）', () => {
   it('非法地址与非 http 协议直接返回 null', async () => {
     expect(await probePlayback('not a url')).toBeNull()
     expect(await probePlayback('magnet:?xt=urn:btih:abc')).toBeNull()
+  })
+})
+
+describe('cacheResolveProbes / readResolveProbe 解析测速缓存', () => {
+  const entry = (mbps: number): CachedSourceProbe => ({
+    probe: { startupMs: 500, throughputMbps: mbps },
+    episodeUrl: 'https://cdn.example.com/v/1/index.m3u8',
+  })
+
+  it('按 源:vod 键存取，键不匹配读不到', () => {
+    cacheResolveProbes(new Map([['srcA:vod1', entry(20)]]))
+    expect(readResolveProbe('srcA', 'vod1')?.probe.throughputMbps).toBe(20)
+    expect(readResolveProbe('srcA', 'vod1')?.episodeUrl).toContain('index.m3u8')
+    expect(readResolveProbe('srcA', 'vod2')).toBeUndefined()
+    expect(readResolveProbe('srcB', 'vod1')).toBeUndefined()
+  })
+
+  it('新一次解析整体替换旧缓存，防串片', () => {
+    cacheResolveProbes(new Map([['srcA:vod1', entry(20)]]))
+    cacheResolveProbes(new Map([['srcB:vod9', entry(8)]]))
+    expect(readResolveProbe('srcA', 'vod1')).toBeUndefined()
+    expect(readResolveProbe('srcB', 'vod9')?.probe.throughputMbps).toBe(8)
   })
 })

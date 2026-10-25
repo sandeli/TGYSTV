@@ -70,7 +70,7 @@ export function useDirectSearch() {
   const cmsClientRef = useRef(cmsClient)
   cmsClientRef.current = cmsClient
 
-  // 对单个源做真实吞吐测速：取详情第一集地址，浏览器直连实下约 1MB 真实分片量吞吐
+  // 对单个源做真实吞吐测速：取详情第一集地址，浏览器直连实下约 256KB 真实分片量吞吐
   const runProbe = useCallback(async (source: VideoSource, vodId: string, version: number) => {
     try {
       const detail = await cmsClientRef.current.getDetail(vodId, source)

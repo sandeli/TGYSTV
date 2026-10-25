@@ -1,6 +1,6 @@
 /**
  * 真实分片吞吐测速（浏览器直连，在观众自己的网络环境里测）：
- * 取分集地址（m3u8）→ 解析播放列表 → 实际下载前几个真实分片（累计约 1MB）→
+ * 取分集地址（m3u8）→ 解析播放列表 → 实际下载前几个真实分片（累计约 256KB）→
  * 用真实字节数与耗时算吞吐；码率取自主列表 BANDWIDTH 或按完整分片的字节/时长估算；
  * 排序主指标是「吞吐余量 = 吞吐 / 码率」——余量越大播得越稳，比单看延迟真实得多。
  *
@@ -21,14 +21,47 @@ export interface PlaybackProbeResult {
   qualityLabel?: string
 }
 
-/** 累计下载目标字节数：约 1MB 才能避开连接初期的爆发速度、测出持续吞吐 */
-const TARGET_BYTES = 1_000_000
+/**
+ * 累计下载目标字节数：原为 1MB（能测出持续吞吐），但用户反馈测速整体太慢——
+ * 慢源一个就占满 10 秒预算、并发轮测时面板半天出不齐数。2026-10-25 用户拍板
+ * 全站降到 256KB：常见源一两个分片内即结算，速度约为原来的 2~4 倍；代价是短样本
+ * 吞吐略带连接初期的爆发水分，排序与筛坏源仍然够用。例外：首个分片总是下完——
+ * 起播耗时与「按完整分片估码率」都靠它，半截分片会让余量算不出来（时间预算仍封顶）。
+ */
+const TARGET_BYTES = 256_000
 /** 最多下载的分片数（分片普遍 1~5MB，通常 1 个就够） */
 const MAX_SEGMENTS = 4
-/** 单次探测总时间预算（毫秒）：慢源下满 1MB 可能很久，到点用已下载字节结算 */
+/** 单次探测总时间预算（毫秒）：慢源下满 256KB 也可能很久，到点用已下载字节结算 */
 const TIME_BUDGET_MS = 10_000
 /** 部分结算的最低字节数：低于此值样本太小、数据不可信，按测速失败处理 */
 const MIN_PARTIAL_BYTES = 128_000
+
+/** 探测采样强度覆盖（默认 256KB / 10 秒）；目前全站统一走默认，保留接口供个别场景调强度 */
+export interface ProbeOptions {
+  targetBytes?: number
+  timeBudgetMs?: number
+}
+
+/**
+ * 直达播放解析页的测速结果缓存（按 源code:vodId 键）：解析页为了选源已经实测过
+ * 若干源，进播放页后换源面板若从零重测，用户要等很久才看到几个「已测」。
+ * 解析页离开前把结果存这里，换源钩子进页先灌入缓存命中的源、只补测没测过的。
+ * 每次解析只保留最近一次的结果集，避免旧片子的结果串味。
+ */
+export interface CachedSourceProbe {
+  probe: PlaybackProbeResult
+  episodeUrl: string
+}
+
+let resolveProbeCache = new Map<string, CachedSourceProbe>()
+
+export function cacheResolveProbes(entries: Map<string, CachedSourceProbe>): void {
+  resolveProbeCache = new Map(entries)
+}
+
+export function readResolveProbe(sourceCode: string, vodId: string): CachedSourceProbe | undefined {
+  return resolveProbeCache.get(`${sourceCode}:${vodId}`)
+}
 
 export interface HlsVariant {
   url: string
@@ -112,6 +145,8 @@ async function downloadSegments(
   urls: string[],
   signal: AbortSignal,
   startedAt: number,
+  targetBytes: number,
+  timeBudgetMs: number,
 ): Promise<DownloadSample> {
   let bytes = 0
   const segmentBytes: number[] = []
@@ -120,7 +155,11 @@ async function downloadSegments(
   let completedAll = true
   const downloadStart = performance.now()
   outer: for (const url of urls) {
-    if (bytes >= TARGET_BYTES || performance.now() - startedAt > TIME_BUDGET_MS) {
+    // 首个分片总是下完（起播耗时与码率估算都靠完整分片），其后达到目标字节即停；时间预算始终生效
+    if (
+      (completedSegments >= 1 && bytes >= targetBytes) ||
+      performance.now() - startedAt > timeBudgetMs
+    ) {
       completedAll = false
       break
     }
@@ -140,7 +179,10 @@ async function downloadSegments(
           thisSegment += value.byteLength
           bytes += value.byteLength
         }
-        if (bytes >= TARGET_BYTES || performance.now() - startedAt > TIME_BUDGET_MS) {
+        if (
+          (completedSegments >= 1 && bytes >= targetBytes) ||
+          performance.now() - startedAt > timeBudgetMs
+        ) {
           completedAll = false
           void reader.cancel().catch(() => {})
           segmentBytes.push(thisSegment)
@@ -209,9 +251,12 @@ function buildResult(
 
 /**
  * 对一个分集地址做真实吞吐测速。episodeUrl 一般是 m3u8；
- * 若是直连媒体文件（mp4 等），直接对文件本身采样下载（只下约 1MB 即停，不会整文件下载）。
+ * 若是直连媒体文件（mp4 等），直接对文件本身采样下载（只下约 256KB 即停，不会整文件下载）。
  */
-export async function probePlayback(episodeUrl: string): Promise<PlaybackProbeResult | null> {
+export async function probePlayback(
+  episodeUrl: string,
+  opts?: ProbeOptions,
+): Promise<PlaybackProbeResult | null> {
   let parsed: URL
   try {
     parsed = new URL(episodeUrl)
@@ -220,8 +265,10 @@ export async function probePlayback(episodeUrl: string): Promise<PlaybackProbeRe
   }
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null
 
+  const targetBytes = opts?.targetBytes ?? TARGET_BYTES
+  const timeBudgetMs = opts?.timeBudgetMs ?? TIME_BUDGET_MS
   const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), TIME_BUDGET_MS + 2000)
+  const timer = setTimeout(() => controller.abort(), timeBudgetMs + 2000)
   const startedAt = performance.now()
   try {
     const firstResponse = await fetch(episodeUrl, {
@@ -242,7 +289,7 @@ export async function probePlayback(episodeUrl: string): Promise<PlaybackProbeRe
       let bytes = firstBytes.byteLength
       const downloadStart = startedAt
       let completedAll = firstChunk.done === true
-      while (!completedAll && bytes < TARGET_BYTES && performance.now() - startedAt <= TIME_BUDGET_MS) {
+      while (!completedAll && bytes < targetBytes && performance.now() - startedAt <= timeBudgetMs) {
         const { done, value } = await reader.read()
         if (done) {
           completedAll = true
@@ -307,6 +354,8 @@ export async function probePlayback(episodeUrl: string): Promise<PlaybackProbeRe
       targetSegments.map(s => s.url),
       controller.signal,
       startedAt,
+      targetBytes,
+      timeBudgetMs,
     )
     if (sample.bytes === 0) return null
     if (!sample.completedAll && sample.bytes < MIN_PARTIAL_BYTES) return null
