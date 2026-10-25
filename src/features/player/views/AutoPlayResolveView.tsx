@@ -246,7 +246,13 @@ export default function AutoPlayResolveView() {
               : 'text-muted-foreground mt-4 text-sm tracking-[0.2em]'
           }
         >
-          {resolveStatusText(progress)}
+          {resolveStatusText(progress).replace(/…$/, '')}
+          {/* 省略号做成与标题一致的三点跳动动画（颜色随文案阶段继承） */}
+          <span className="ml-0.5 inline-flex gap-0.5 align-baseline">
+            <span className="animate-bounce [animation-delay:0ms]">.</span>
+            <span className="animate-bounce [animation-delay:150ms]">.</span>
+            <span className="animate-bounce [animation-delay:300ms]">.</span>
+          </span>
         </p>
       </div>
     </div>

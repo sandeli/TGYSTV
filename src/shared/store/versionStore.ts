@@ -57,6 +57,16 @@ const formatDate = (dateStr: string) => {
 // 版本更新历史
 const VERSION_UPDATES: VersionUpdate[] = [
   {
+    version: '2.32.1',
+    title: '解析页文案省略号动画',
+    date: formatDate('2026-10-25'),
+    features: [],
+    fixes: [
+      '播放解析页的状态文案（「正在优选播放源…」「准备就绪，即将开始播放…」）末尾的省略号改成与页面标题一致的三点跳动动画，颜色随文案阶段一起变（优选中为灰色、准备就绪时转主色）。',
+    ],
+    breaking: [],
+  },
+  {
     version: '2.32.0',
     title: '站长订阅源服务端自动更新（全站同步）',
     date: formatDate('2026-10-25'),
