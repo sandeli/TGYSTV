@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { pickBestCandidate, resolveStatusText, type AutoPlayCandidate } from './AutoPlayResolveView'
+import {
+  pickBestCandidate,
+  qualifiesForEarlyStart,
+  resolveStatusText,
+  type AutoPlayCandidate,
+} from './AutoPlayResolveView'
 import type { PlaybackProbeResult } from '@/shared/lib/playbackProbe'
 
 const probe = (partial: Partial<PlaybackProbeResult>): PlaybackProbeResult => ({
@@ -49,6 +54,45 @@ describe('pickBestCandidate', () => {
   it('全未测速时返回第一个候选', () => {
     const best = pickBestCandidate([c({ sourceId: 'a' }), c({ sourceId: 'b' })])
     expect(best?.sourceId).toBe('a')
+  })
+})
+
+describe('qualifiesForEarlyStart 好源即开播门槛', () => {
+  it('精确匹配 + 起播快 + 余量足 → 提前开播', () => {
+    expect(
+      qualifiesForEarlyStart(c({ tier: 0, probe: probe({ startupMs: 800, headroom: 3 }) })),
+    ).toBe(true)
+    expect(
+      qualifiesForEarlyStart(c({ tier: 0, probe: probe({ startupMs: 2000, headroom: 2 }) })),
+    ).toBe(true)
+  })
+
+  it('非精确匹配（档位 >0）哪怕测速好也不提前', () => {
+    expect(
+      qualifiesForEarlyStart(c({ tier: 1, probe: probe({ startupMs: 300, headroom: 9 }) })),
+    ).toBe(false)
+  })
+
+  it('起播慢或余量不足不提前', () => {
+    expect(
+      qualifiesForEarlyStart(c({ tier: 0, probe: probe({ startupMs: 2600, headroom: 5 }) })),
+    ).toBe(false)
+    expect(
+      qualifiesForEarlyStart(c({ tier: 0, probe: probe({ startupMs: 500, headroom: 1.4 }) })),
+    ).toBe(false)
+  })
+
+  it('无余量数据时用绝对吞吐兜底判定', () => {
+    expect(qualifiesForEarlyStart(c({ tier: 0, probe: probe({ startupMs: 500, throughputMbps: 12 }) }))).toBe(
+      true,
+    )
+    expect(qualifiesForEarlyStart(c({ tier: 0, probe: probe({ startupMs: 500, throughputMbps: 5 }) }))).toBe(
+      false,
+    )
+  })
+
+  it('未测速（probe 为空）不提前', () => {
+    expect(qualifiesForEarlyStart(c({ tier: 0, probe: null }))).toBe(false)
   })
 })
 

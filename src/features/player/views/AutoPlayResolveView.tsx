@@ -19,8 +19,10 @@ import {
  * 跨源搜索同名资源 → 按标题匹配档位筛候选 → 逐个实测第一集真实分片吞吐 →
  * 选出最稳的源后 replace 跳转到标准播放地址 /play/cms/:source/:vodId（播放页本体不感知此流程）。
  * 规则与搜索结果页一致：先比匹配档位，再比测速（吞吐余量优先、再比吞吐、再比起播），测不出的排后面。
- * 主路径等全部源搜索完、候选测速完再做选择；30 秒兜底上限：到时已有候选就用当前
- * 最佳开播（v2.1.43 由 10 秒放宽——10 秒时慢源还没测完就被迫早选，用户反馈会挑错源）。
+ * 等待时长三段收口（v2.33.0 起，之前是等全场扫完、最长 30 秒，体感太慢）：
+ * ① 好源即开播——精确匹配候选测出起播 ≤2 秒且吞吐余量 ≥2 倍（无余量数据时吞吐 ≥8Mbps）
+ *    就立即结束等待；② 15 秒软上限——已有测完的候选就用当前最佳；③ 30 秒硬上限兜底
+ *    （v2.1.43 由 10 秒放宽的教训保留：软/硬上限都只在「已有可用候选」时才触发早选）。
  * 一个候选都没有则等搜索扫完后回退搜索结果页。
  */
 
@@ -44,6 +46,28 @@ export function pickBestCandidate(candidates: AutoPlayCandidate[]): AutoPlayCand
 const SEARCH_WORKERS = 4
 const PROBE_WORKERS = 3
 const RESOLVE_DEADLINE_MS = 30000
+/** 软上限：到时已有测完的候选就用当前最佳开播，不再等慢源（硬上限仍为 RESOLVE_DEADLINE_MS） */
+const SOFT_DEADLINE_MS = 15000
+/** 提前开播门槛：精确匹配候选起播不超过该耗时（毫秒） */
+const EARLY_START_MAX_STARTUP_MS = 2000
+/** 提前开播门槛：吞吐余量（有码率估算时）至少该倍数 */
+const EARLY_START_MIN_HEADROOM = 2
+/** 提前开播门槛：无码率估算时以绝对吞吐兜底（Mbps，足够稳播 1080p 并留余量） */
+const EARLY_START_MIN_THROUGHPUT_MBPS = 8
+
+/**
+ * 该候选是否「足够好、可以不等全场直接开播」：必须是片名精确匹配（档位 0），
+ * 且实测起播快、吞吐余量足。等待的长尾主要是慢源在逐个测速，一旦手里有这样的
+ * 源，继续等下去几乎不会换出更好的选择，先开播省下的时间最可观。
+ */
+export function qualifiesForEarlyStart(candidate: AutoPlayCandidate): boolean {
+  if (candidate.tier !== 0 || !candidate.probe) return false
+  if (candidate.probe.startupMs > EARLY_START_MAX_STARTUP_MS) return false
+  if (typeof candidate.probe.headroom === 'number') {
+    return candidate.probe.headroom >= EARLY_START_MIN_HEADROOM
+  }
+  return candidate.probe.throughputMbps >= EARLY_START_MIN_THROUGHPUT_MBPS
+}
 
 /**
  * 解析页所处阶段：不报计数，只报阶段——搜索进度条快到底（≥90%）时进入临开播阶段，
@@ -107,8 +131,13 @@ export default function AutoPlayResolveView() {
       if (searchDone && probesActive === 0 && probeQueue.length === 0) finish()
     }
 
+    const softDeadline = setTimeout(() => {
+      // 软上限：已有测完的候选就用当前最佳开播，不再陪慢源耗着
+      if (candidates.some(c => c.probe)) finish()
+    }, SOFT_DEADLINE_MS)
+
     const deadline = setTimeout(() => {
-      // 软上限：已有候选就用当前最佳开播；还没有则等搜索扫完再兜底
+      // 硬上限：已有候选就用当前最佳开播；还没有则等搜索扫完再兜底
       if (candidates.length > 0) finish()
     }, RESOLVE_DEADLINE_MS)
 
@@ -137,6 +166,11 @@ export default function AutoPlayResolveView() {
           probesActive -= 1
           probesDone += 1
           if (!cancelled) setProgress(p => ({ ...p, probed: probesDone }))
+          // 好源即开播：精确匹配且测速足够稳的候选一出现就结束等待，不陪长尾慢源
+          if (qualifiesForEarlyStart(candidate)) {
+            finish()
+            return
+          }
           maybeFinish()
           continue
         }
@@ -200,6 +234,7 @@ export default function AutoPlayResolveView() {
 
     return () => {
       cancelled = true
+      clearTimeout(softDeadline)
       clearTimeout(deadline)
     }
     // 只按标题跑一次
