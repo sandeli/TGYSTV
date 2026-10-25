@@ -15,6 +15,12 @@ import {
   SITE_BEHAVIOR_SETTING_KEYS,
   type PagesContext,
 } from '../../_lib/auth'
+import {
+  MASTER_SUBSCRIPTION_SOURCES_KEY,
+  maybeUpdateMasterSubscriptions,
+  mergeSiteWideWithSubscriptionSources,
+  parseStoredSubscriptionSources,
+} from '../../_lib/subscriptionUpdate'
 
 /** 公开配置一次要读的全部 settings 键：一条 IN 查询拿完，避免逐项往返拖慢首屏 */
 const CONFIG_SETTING_KEYS = [
@@ -24,6 +30,7 @@ const CONFIG_SETTING_KEYS = [
   'announcement_bar_content',
   'initial_video_sources',
   'admin_sitewide_sources',
+  MASTER_SUBSCRIPTION_SOURCES_KEY,
   'managed_source_enabled',
   'registration_mode',
   'registration_open',
@@ -64,6 +71,12 @@ export const onRequest = async (context: PagesContext) => {
   const full =
     maxUsers > 0 ? registrationFull(maxUsers, await countRegisteredUsers(db)) : false
 
+  // 站长订阅源到期检查（MoonTV 式「有人访问就顺带查」）：不阻塞本次响应，
+  // 到期时由服务端在后台抓取更新，结果在后续访问中生效；无到期订阅时仅一次轻量读取
+  if (context.waitUntil) {
+    context.waitUntil(maybeUpdateMasterSubscriptions(db))
+  }
+
   return json({
     authEnabled: true,
     registrationOpen: registrationMode !== 'closed',
@@ -80,7 +93,11 @@ export const onRequest = async (context: PagesContext) => {
     announcementBar: get('announcement_bar_content') ?? '',
     doubanProxy: parseDoubanProxySettings(get),
     initialVideoSources: get('initial_video_sources') ?? '',
-    siteWideSources: get('admin_sitewide_sources') ?? '',
+    // 全站分发 = 站长手动全站源 + 服务端自动更新的站长订阅源（订阅数据变了全站随之变）
+    siteWideSources: mergeSiteWideWithSubscriptionSources(
+      get('admin_sitewide_sources'),
+      parseStoredSubscriptionSources(get(MASTER_SUBSCRIPTION_SOURCES_KEY) ?? null),
+    ),
     managedSourceEnabled: parseManagedSourceEnabled(get('managed_source_enabled')),
     siteBehavior: parseSiteBehavior(get),
   })

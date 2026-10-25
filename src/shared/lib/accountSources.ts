@@ -86,6 +86,26 @@ export function serializeAccountSources(list: VideoSource[]): string {
 }
 
 /**
+ * 把服务端下发的订阅源按订阅 id 分组（id 约定 sub:<订阅id>:<序号>）。
+ * 服务端自动更新维护的是站长订阅的最新源快照，站长端登录时按组应用到本地，
+ * 每组交给 apiStore.replaceSubscriptionSources 整体换新；非订阅形态的条目跳过。
+ */
+export function groupServerSubscriptionSources(
+  entries: AccountSourcePayload[],
+): Map<string, VideoSource[]> {
+  const grouped = new Map<string, VideoSource[]>()
+  for (const entry of entries) {
+    if (!isSubscriptionSourceId(entry.id)) continue
+    const subId = entry.id.split(':')[1]
+    if (!subId) continue
+    const list = grouped.get(subId) ?? []
+    list.push(fromAccountSourcePayload(entry))
+    grouped.set(subId, list)
+  }
+  return grouped
+}
+
+/**
  * 托管镜像运行后，找出「服务端有、本机列表里却缺失、且不是正以托管形态展示」的账户源。
  * 这类条目是被托管镜像摘除的（典型：关闭某源的「全站生效」后它退出托管清单），
  * 应以个人形态补回本地，而不是当作已删除。注意只能在托管镜像刚运行完时调用它对账：

@@ -45,6 +45,19 @@ const SEARCH_WORKERS = 4
 const PROBE_WORKERS = 3
 const RESOLVE_DEADLINE_MS = 30000
 
+/**
+ * 解析页所处阶段：不报计数，只报阶段——搜索进度条快到底（≥90%）时进入临开播阶段，
+ * 其余时间都是优选进行中（纯函数，可测）。
+ */
+export function resolvePhase(progress: { searched: number; total: number }): 'ready' | 'searching' {
+  return progress.total > 0 && progress.searched / progress.total >= 0.9 ? 'ready' : 'searching'
+}
+
+/** 阶段 → 状态文案 */
+export function resolveStatusText(progress: { searched: number; total: number }): string {
+  return resolvePhase(progress) === 'ready' ? '准备就绪，即将开始播放…' : '正在优选播放源…'
+}
+
 export default function AutoPlayResolveView() {
   const navigate = useNavigate()
   const cmsClient = useCmsClient()
@@ -215,8 +228,8 @@ export default function AutoPlayResolveView() {
         </p>
         <p className="text-muted-foreground mt-1 text-sm">《{title}》</p>
       </div>
-      {/* 搜索进度条 */}
-      <div className="w-56">
+      {/* 搜索进度条 + 阶段文案（不报计数；临开播时文案转主色强调，与进度条呼应） */}
+      <div className="w-64">
         <div className="bg-primary/15 h-1.5 overflow-hidden rounded-full">
           <div
             className="bg-primary h-full rounded-full transition-all duration-500"
@@ -225,9 +238,15 @@ export default function AutoPlayResolveView() {
             }}
           />
         </div>
-        <p className="text-muted-foreground mt-3 text-xs">
-          已搜索 {progress.searched}/{progress.total} 个源 · 找到 {progress.found} 个可播源 · 已测速{' '}
-          {progress.probed} 个
+        <p
+          aria-live="polite"
+          className={
+            resolvePhase(progress) === 'ready'
+              ? 'text-primary mt-4 text-sm font-medium tracking-[0.2em]'
+              : 'text-muted-foreground mt-4 text-sm tracking-[0.2em]'
+          }
+        >
+          {resolveStatusText(progress)}
         </p>
       </div>
     </div>

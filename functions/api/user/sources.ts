@@ -1,11 +1,13 @@
 import {
   getUserSources,
   json,
+  MASTER_USER_ID,
   readJson,
   requireUser,
   saveUserSources,
   type PagesContext,
 } from '../../_lib/auth'
+import { readMasterSubscriptionData } from '../../_lib/subscriptionUpdate'
 
 /**
  * 账号源（随账户走，不随浏览器）：每个登录用户一份，按 user_id 隔离。
@@ -20,7 +22,17 @@ export const onRequest = async (context: PagesContext) => {
   const { db, user } = result
 
   if (context.request.method === 'GET') {
-    return json({ sources: await getUserSources(db, user.userId) })
+    const sources = await getUserSources(db, user.userId)
+    // 站长额外带回服务端自动更新的最新订阅源与刷新状态（普通用户没有站长订阅）
+    if (user.userId === MASTER_USER_ID) {
+      const subscription = await readMasterSubscriptionData(db)
+      return json({
+        sources,
+        subscriptionSources: subscription.sources,
+        subscriptionMeta: subscription.meta,
+      })
+    }
+    return json({ sources })
   }
 
   if (context.request.method === 'PUT') {

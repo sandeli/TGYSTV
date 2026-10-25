@@ -495,9 +495,48 @@ export interface AccountSourcePayload {
   siteWide: boolean
 }
 
-/** 读取当前登录用户的账号源（随账户走，按账号隔离） */
-export function fetchUserSources(token: string): Promise<{ sources: AccountSourcePayload[] }> {
-  return request<{ sources: AccountSourcePayload[] }>('/api/user/sources', { method: 'GET' }, token)
+/** 站长订阅清单条目（同步到服务端用于自动更新的最小信息） */
+export interface MasterSubscriptionPayload {
+  id: string
+  name: string
+  url: string
+  /** 自动刷新间隔（分钟），0 = 不自动刷新 */
+  refreshInterval: number
+}
+
+/** 服务端维护的单条订阅刷新状态（随站长账号源接口下发） */
+export interface SubscriptionRefreshMeta {
+  id: string
+  /** 上次刷新时间（unix 秒） */
+  lastRefreshedAt: number | null
+  lastRefreshSuccess: boolean
+  lastRefreshError: string | null
+  sourceCount: number
+}
+
+/** 读取当前登录用户的账号源（随账户走，按账号隔离）；站长额外带回服务端订阅源与刷新状态 */
+export function fetchUserSources(token: string): Promise<{
+  sources: AccountSourcePayload[]
+  subscriptionSources?: AccountSourcePayload[]
+  subscriptionMeta?: SubscriptionRefreshMeta[]
+}> {
+  return request<{
+    sources: AccountSourcePayload[]
+    subscriptionSources?: AccountSourcePayload[]
+    subscriptionMeta?: SubscriptionRefreshMeta[]
+  }>('/api/user/sources', { method: 'GET' }, token)
+}
+
+/** 同步站长订阅清单到服务端（仅主账号）：服务端据此到期自动抓取更新订阅源 */
+export function saveMasterSubscriptions(
+  token: string,
+  subscriptions: MasterSubscriptionPayload[],
+): Promise<{ ok: true; count: number }> {
+  return request<{ ok: true; count: number }>(
+    '/api/user/subscriptions',
+    { method: 'PUT', body: JSON.stringify({ subscriptions }) },
+    token,
+  )
 }
 
 /** 整体保存当前用户的账号源；站长开启全站生效的源由服务端同步派生到全站分发列表 */

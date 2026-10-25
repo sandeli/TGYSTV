@@ -9,6 +9,7 @@ import {
   type AuthEnv,
   type D1Database,
 } from './auth'
+import { MASTER_SUBSCRIPTION_SOURCES_KEY } from './subscriptionUpdate'
 
 /**
  * TVBox 接口（兼容影视、OK影视等 TVBox 系客户端）：
@@ -144,8 +145,10 @@ export async function readTvboxSources(db: D1Database, env: AuthEnv): Promise<Tv
   raw = raw.trim()
   // 站长开启「全站生效」的手动源（服务端派生，与网页端托管清单同一口径合并）
   const siteWideRaw = ((await getSetting(db, 'admin_sitewide_sources')) ?? '').trim()
-  if (!raw && !siteWideRaw) return []
-  const cacheKey = `${raw}\n${siteWideRaw}`
+  // 站长订阅源（服务端自动更新维护，与网页端全站分发同一口径）
+  const subscriptionRaw = ((await getSetting(db, MASTER_SUBSCRIPTION_SOURCES_KEY)) ?? '').trim()
+  if (!raw && !siteWideRaw && !subscriptionRaw) return []
+  const cacheKey = `${raw}\n${siteWideRaw}\n${subscriptionRaw}`
   if (
     sourcesCache &&
     sourcesCache.key === cacheKey &&
@@ -176,6 +179,7 @@ export async function readTvboxSources(db: D1Database, env: AuthEnv): Promise<Tv
   }
   appendEntries(parseManagedSourcesJson(text))
   if (siteWideRaw) appendEntries(parseManagedSourcesJson(siteWideRaw))
+  if (subscriptionRaw) appendEntries(parseManagedSourcesJson(subscriptionRaw))
   sourcesCache = { key: cacheKey, at: Date.now(), sources }
   return sources
 }

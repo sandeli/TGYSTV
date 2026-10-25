@@ -6,6 +6,7 @@ import {
   dedupeAccountSources,
   findMirrorDroppedSources,
   fromAccountSourcePayload,
+  groupServerSubscriptionSources,
   serializeAccountSources,
   stripSiteWideFlags,
   toAccountSourcePayload,
@@ -171,5 +172,27 @@ describe('dedupeAccountSources 去重口径', () => {
       src({ id: 'c', name: '非凡', url: 'https://cj.example/api' }),
     ])
     expect(out.map(s => s.id)).toEqual(['a', 'b', 'c'])
+  })
+})
+
+describe('groupServerSubscriptionSources 服务端订阅源分组', () => {
+  it('按订阅 id 分组，非订阅条目跳过', () => {
+    const payload = (id: string) => ({
+      id,
+      name: id,
+      url: 'https://x.example/api',
+      isEnabled: true,
+      siteWide: false,
+    })
+    const grouped = groupServerSubscriptionSources([
+      payload('sub:aaa:0'),
+      payload('sub:aaa:1'),
+      payload('sub:bbb:0'),
+      payload('manual-1'),
+      payload('sub::0'),
+    ])
+    expect([...grouped.keys()].sort()).toEqual(['aaa', 'bbb'])
+    expect(grouped.get('aaa')?.map(s => s.id)).toEqual(['sub:aaa:0', 'sub:aaa:1'])
+    expect(grouped.get('bbb')).toHaveLength(1)
   })
 })

@@ -2,13 +2,15 @@ import { toast } from 'sonner'
 import type { VideoSource } from '@tgys/cms-core'
 import { useApiStore } from '@/shared/store/apiStore'
 import { useAuthStore } from '@/shared/store/authStore'
-import { fetchUserSources, saveUserSources } from '@/shared/lib/authApi'
+import { useSubscriptionStore } from '@/shared/store/subscriptionStore'
+import { fetchUserSources, saveMasterSubscriptions, saveUserSources } from '@/shared/lib/authApi'
 import {
   collectAccountSources,
   dedupeAccountSources,
   stripSiteWideFlags,
   findMirrorDroppedSources,
   fromAccountSourcePayload,
+  groupServerSubscriptionSources,
   serializeAccountSources,
   toAccountSourcePayload,
 } from '@/shared/lib/accountSources'
@@ -74,6 +76,35 @@ export function startAccountSourceSync(userId: number): () => void {
     }
   }
 
+  // 站长订阅清单上行：订阅定义只存本机时服务端无从自动更新，这里把清单（链接+间隔）
+  // 同步一份到服务端；服务端到期自己抓取，站长不必开着浏览器。仅站长会话做，失败静默。
+  let registryHash: string | null = null
+  let registryTimer: number | null = null
+  const pushRegistry = async () => {
+    if (!isMaster || disposed) return
+    const token = useAuthStore.getState().token
+    if (!token) return
+    const subs = useSubscriptionStore
+      .getState()
+      .subscriptions.map(s => ({ id: s.id, name: s.name, url: s.url, refreshInterval: s.refreshInterval }))
+    const hash = JSON.stringify(subs)
+    if (hash === registryHash) return
+    try {
+      await saveMasterSubscriptions(token, subs)
+      registryHash = hash
+    } catch {
+      // 静默：下次订阅变更或下次打开站点时会再同步
+    }
+  }
+  const scheduleRegistryPush = () => {
+    if (registryTimer !== null) window.clearTimeout(registryTimer)
+    registryTimer = window.setTimeout(() => {
+      registryTimer = null
+      void pushRegistry()
+    }, 1200)
+  }
+  const unsubscribeSubs = isMaster ? useSubscriptionStore.subscribe(scheduleRegistryPush) : () => {}
+
   const schedulePush = () => {
     if (timer !== null) window.clearTimeout(timer)
     timer = window.setTimeout(() => {
@@ -106,6 +137,22 @@ export function startAccountSourceSync(userId: number): () => void {
       if (disposed) return
       await useApiStore.getState().initializeEnvSources()
       if (disposed) return
+      // 站长：把本机订阅清单上行服务端（供服务端到期自动更新），并应用服务端
+      // 已自动更新好的订阅源快照与刷新状态——换设备打开也是最新的一份
+      if (isMaster) {
+        void pushRegistry()
+        if (remote.subscriptionSources && remote.subscriptionSources.length > 0) {
+          const grouped = groupServerSubscriptionSources(remote.subscriptionSources)
+          applying = true
+          for (const [subId, list] of grouped) {
+            useApiStore.getState().replaceSubscriptionSources(subId, list)
+          }
+          applying = false
+        }
+        if (remote.subscriptionMeta) {
+          useSubscriptionStore.getState().applyServerRefreshMeta(remote.subscriptionMeta)
+        }
+      }
       for (const s of useApiStore.getState().videoAPIs) seenIds.add(s.id)
       lastHash = serializeAccountSources(collect())
       if (serializeAccountSources(serverKnown) !== serializeAccountSources(merged)) {
@@ -146,6 +193,8 @@ export function startAccountSourceSync(userId: number): () => void {
   return () => {
     disposed = true
     unsubscribe()
+    unsubscribeSubs()
     if (timer !== null) window.clearTimeout(timer)
+    if (registryTimer !== null) window.clearTimeout(registryTimer)
   }
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { pickBestCandidate, type AutoPlayCandidate } from './AutoPlayResolveView'
+import { pickBestCandidate, resolveStatusText, type AutoPlayCandidate } from './AutoPlayResolveView'
 import type { PlaybackProbeResult } from '@/shared/lib/playbackProbe'
 
 const probe = (partial: Partial<PlaybackProbeResult>): PlaybackProbeResult => ({
@@ -49,5 +49,23 @@ describe('pickBestCandidate', () => {
   it('全未测速时返回第一个候选', () => {
     const best = pickBestCandidate([c({ sourceId: 'a' }), c({ sourceId: 'b' })])
     expect(best?.sourceId).toBe('a')
+  })
+})
+
+describe('resolveStatusText', () => {
+  it('搜索未到九成时显示优选进行中（不报计数）', () => {
+    expect(resolveStatusText({ searched: 0, total: 20 })).toBe('正在优选播放源…')
+    expect(resolveStatusText({ searched: 10, total: 20 })).toBe('正在优选播放源…')
+    expect(resolveStatusText({ searched: 17, total: 20 })).toBe('正在优选播放源…')
+  })
+
+  it('进度条快到底（≥90%）时显示准备就绪', () => {
+    expect(resolveStatusText({ searched: 18, total: 20 })).toBe('准备就绪，即将开始播放…')
+    expect(resolveStatusText({ searched: 20, total: 20 })).toBe('准备就绪，即将开始播放…')
+    expect(resolveStatusText({ searched: 9, total: 10 })).toBe('准备就绪，即将开始播放…')
+  })
+
+  it('没有源时保持优选文案（页面会立即兜底跳转）', () => {
+    expect(resolveStatusText({ searched: 0, total: 0 })).toBe('正在优选播放源…')
   })
 })

@@ -224,7 +224,11 @@ export const getInitialVideoSources = async (): Promise<VideoApi[]> => {
     const siteWideSources = useAuthStore.getState().authConfig?.siteWideSources
     if (siteWideSources && siteWideSources.trim()) {
       const extra = await loadVideoSources(siteWideSources)
-      return mergeManagedSourceLists(base, extra)
+      // 全站分发里混有站长订阅源（服务端自动更新）：站长本人剔除这部分——他的订阅源
+      // 由订阅通道（本机订阅 + 服务端快照）维护，若再以托管形态镜像进来会同 id 重复
+      const isMaster = useAuthStore.getState().user?.id === 0
+      const effective = isMaster ? extra.filter(s => !s.id.startsWith('sub:')) : extra
+      return mergeManagedSourceLists(base, effective)
     }
   } catch {
     // 忽略：全站源解析失败时只用基础托管源

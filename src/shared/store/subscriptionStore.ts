@@ -73,9 +73,20 @@ interface SubscriptionState {
   subscriptions: VideoSourceSubscription[]
 }
 
+/** 服务端自动更新回报的单条订阅刷新状态（unix 秒） */
+export interface ServerSubscriptionRefreshMeta {
+  id: string
+  lastRefreshedAt: number | null
+  lastRefreshSuccess: boolean
+  lastRefreshError: string | null
+  sourceCount: number
+}
+
 interface SubscriptionActions {
   /** 添加新订阅（添加后立即拉取一次） */
   addSubscription: (url: string, name?: string, refreshInterval?: number) => Promise<void>
+  /** 应用服务端自动更新的刷新状态（仅当服务端时间更新时才覆盖本地记录） */
+  applyServerRefreshMeta: (meta: ServerSubscriptionRefreshMeta[]) => void
   /** 移除订阅（同时从 apiStore 移除对应视频源） */
   removeSubscription: (subscriptionId: string) => void
   /** 刷新指定订阅 */
@@ -187,6 +198,24 @@ export const useSubscriptionStore = create<SubscriptionStore>()(
 
             toast.error(`刷新订阅「${subscription.name}」失败：${errorMessage}`)
           }
+        },
+
+        applyServerRefreshMeta: (meta: ServerSubscriptionRefreshMeta[]) => {
+          set(state => {
+            for (const m of meta) {
+              if (m.lastRefreshedAt == null) continue
+              const sub = state.subscriptions.find(s => s.id === m.id)
+              if (!sub) continue
+              const serverAt = m.lastRefreshedAt * 1000
+              const localAt = sub.lastRefreshedAt ? new Date(sub.lastRefreshedAt).getTime() : 0
+              // 本机刚刷过（时间更新）就不被服务端较旧的记录覆盖
+              if (serverAt < localAt) continue
+              sub.lastRefreshedAt = new Date(serverAt)
+              sub.lastRefreshSuccess = m.lastRefreshSuccess
+              sub.lastRefreshError = m.lastRefreshError
+              sub.sourceCount = m.sourceCount
+            }
+          })
         },
 
         refreshAllSubscriptions: async () => {
