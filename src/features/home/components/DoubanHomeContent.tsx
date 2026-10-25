@@ -143,7 +143,8 @@ function DoubanSection({ category }: { category: DoubanCategory }) {
       </div>
       <div className="pt-2">
         <Carousel opts={{ watchDrag: canDrag, slidesToScroll }} setApi={setCarouselApi}>
-          <CarouselContent>
+          {/* py 给 hover 立体浮起留出不被轮播视口裁掉的余量 */}
+          <CarouselContent className="py-2.5">
             {items.map(item => {
               const rating = Number.parseFloat(item.rate)
               return (
@@ -153,6 +154,7 @@ function DoubanSection({ category }: { category: DoubanCategory }) {
                     posterUrl={item.cover ? doubanPosterUrl(item.cover) : null}
                     title={item.title}
                     rating={Number.isFinite(rating) && rating > 0 ? rating : undefined}
+                    hoverEffect="tilt3d"
                   />
                 </CarouselItem>
               )

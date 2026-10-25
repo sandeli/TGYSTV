@@ -57,6 +57,16 @@ const formatDate = (dateStr: string) => {
 // 版本更新历史
 const VERSION_UPDATES: VersionUpdate[] = [
   {
+    version: '2.35.0',
+    title: '豆瓣图片墙立体效果',
+    date: formatDate('2026-10-25'),
+    features: [
+      '首页豆瓣图片墙（分类整页同享）换上立体海报效果（参考片库站）：卡片静止时自带投影垫出厚度，鼠标移上去会透视倾斜着浮起来（向左前方微微翻转 + 放大），同时亮起主色高亮边框并带一圈光晕，移开平滑落回。搜索结果、收藏等其他页面的海报卡片维持原效果不变。',
+    ],
+    fixes: [],
+    breaking: [],
+  },
+  {
     version: '2.34.0',
     title: '测速全面提速：全站采样降到 256KB + 换源面板复用解析结果',
     date: formatDate('2026-10-25'),

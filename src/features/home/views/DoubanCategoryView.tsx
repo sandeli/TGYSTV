@@ -97,6 +97,7 @@ export default function DoubanCategoryView() {
                 posterUrl={item.cover ? doubanPosterUrl(item.cover) : null}
                 title={item.title}
                 rating={Number.isFinite(rating) && rating > 0 ? rating : undefined}
+                hoverEffect="tilt3d"
               />
             )
           })}

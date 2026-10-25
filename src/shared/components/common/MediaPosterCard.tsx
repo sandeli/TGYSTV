@@ -23,6 +23,11 @@ interface MediaPosterCardProps {
   topRightLabelColorScheme?: SourceColorScheme
   /** 评分 (0-10) - 显示在右下角 */
   rating?: number
+  /**
+   * hover 效果：default 为站内通用（图片放大 + 播放遮罩）；
+   * tilt3d 为豆瓣图片墙专用——卡片带透视倾斜的立体浮起 + 主色高亮边框与光晕（参考片库站效果）
+   */
+  hoverEffect?: 'default' | 'tilt3d'
 }
 
 /**
@@ -39,6 +44,7 @@ export function MediaPosterCard({
   topRightLabel,
   topRightLabelColorScheme,
   rating,
+  hoverEffect = 'default',
 }: MediaPosterCardProps) {
   // 海报加载失败时兜底为 No Image 占位块（借鉴 KVideo 的两级兜底），不裂图
   const [imgError, setImgError] = useState(false)
@@ -53,8 +59,14 @@ export function MediaPosterCard({
   return (
     <NavLink to={to}>
       <div className="group cursor-pointer">
-        {/* 海报卡片 */}
-        <div className="relative overflow-hidden rounded-lg">
+        {/* 海报卡片（tilt3d：静止时已有投影垫出立体感，hover 时透视倾斜浮起 + 主色亮边光晕） */}
+        <div
+          className={
+            hoverEffect === 'tilt3d'
+              ? 'relative overflow-hidden rounded-lg shadow-[0_8px_20px_-8px_rgba(0,0,0,0.45)] transition-[transform,box-shadow] duration-300 ease-out group-hover:z-10 group-hover:[transform:perspective(900px)_rotateX(5deg)_rotateY(-7deg)_scale(1.05)] group-hover:shadow-[0_22px_38px_-12px_rgba(0,0,0,0.6),0_0_0_2px_var(--primary),0_0_26px_-4px_var(--primary)]'
+              : 'relative overflow-hidden rounded-lg'
+          }
+        >
           <AspectRatio ratio={aspectRatio}>
             {posterUrl && !imgError ? (
               <img
