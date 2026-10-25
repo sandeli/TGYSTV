@@ -3,6 +3,7 @@ import {
   pickBestCandidate,
   qualifiesForEarlyStart,
   resolveStatusText,
+  shouldEarlyStart,
   type AutoPlayCandidate,
 } from './AutoPlayResolveView'
 import type { PlaybackProbeResult } from '@/shared/lib/playbackProbe'
@@ -62,8 +63,9 @@ describe('qualifiesForEarlyStart 好源即开播门槛', () => {
     expect(
       qualifiesForEarlyStart(c({ tier: 0, probe: probe({ startupMs: 800, headroom: 3 }) })),
     ).toBe(true)
+    // 门槛边界：起播恰好 1.2 秒、余量恰好 3 倍也放行
     expect(
-      qualifiesForEarlyStart(c({ tier: 0, probe: probe({ startupMs: 2000, headroom: 2 }) })),
+      qualifiesForEarlyStart(c({ tier: 0, probe: probe({ startupMs: 1200, headroom: 3 }) })),
     ).toBe(true)
   })
 
@@ -80,6 +82,10 @@ describe('qualifiesForEarlyStart 好源即开播门槛', () => {
     expect(
       qualifiesForEarlyStart(c({ tier: 0, probe: probe({ startupMs: 500, headroom: 1.4 }) })),
     ).toBe(false)
+    // 旧门槛（2 秒 / 2 倍）能过的源，新门槛下不再提前——防「秒开但播不动」
+    expect(
+      qualifiesForEarlyStart(c({ tier: 0, probe: probe({ startupMs: 1800, headroom: 2.5 }) })),
+    ).toBe(false)
   })
 
   it('无余量数据时用绝对吞吐兜底判定', () => {
@@ -93,6 +99,26 @@ describe('qualifiesForEarlyStart 好源即开播门槛', () => {
 
   it('未测速（probe 为空）不提前', () => {
     expect(qualifiesForEarlyStart(c({ tier: 0, probe: null }))).toBe(false)
+  })
+})
+
+describe('shouldEarlyStart 至少测三个再提前开播', () => {
+  const good = c({ sourceId: 'good', tier: 0, probe: probe({ startupMs: 600, headroom: 3 }) })
+  const meh = c({ sourceId: 'meh', tier: 0, probe: probe({ startupMs: 900, headroom: 1.2 }) })
+
+  it('只测完 1~2 个时，哪怕有好源也不提前', () => {
+    expect(shouldEarlyStart([good], 1)).toBe(false)
+    expect(shouldEarlyStart([good, meh], 2)).toBe(false)
+  })
+
+  it('测完 3 个且最佳候选达标 → 提前开播', () => {
+    expect(shouldEarlyStart([meh, good, meh], 3)).toBe(true)
+    expect(shouldEarlyStart([meh, good, meh], 6)).toBe(true)
+  })
+
+  it('测完 3 个但最佳候选不达标 → 继续等', () => {
+    expect(shouldEarlyStart([meh, meh, meh], 3)).toBe(false)
+    expect(shouldEarlyStart([], 3)).toBe(false)
   })
 })
 
