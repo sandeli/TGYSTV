@@ -25,7 +25,8 @@ interface MediaPosterCardProps {
   rating?: number
   /**
    * hover 效果：default 为站内通用（图片放大 + 播放遮罩）；
-   * tilt3d 为豆瓣图片墙专用——卡片带透视倾斜的立体浮起 + 主色高亮边框与光晕（参考片库站效果）
+   * tilt3d 为豆瓣图片墙专用——卡片轻抬浮起 + 柔和大投影 + 主色高亮边框，简洁大气
+   * （名字沿用最初的立体版命名；翻转效果用户反馈不好看已去掉，只保留浮起与投影）
    */
   hoverEffect?: 'default' | 'tilt3d'
 }
@@ -59,11 +60,11 @@ export function MediaPosterCard({
   return (
     <NavLink to={to}>
       <div className="group cursor-pointer">
-        {/* 海报卡片（tilt3d：静止时已有投影垫出立体感，hover 时透视倾斜浮起 + 主色亮边光晕） */}
+        {/* 海报卡片（tilt3d：柔和投影垫底，hover 时整卡轻抬放大 + 大幅柔化投影 + 主色细亮边） */}
         <div
           className={
             hoverEffect === 'tilt3d'
-              ? 'relative overflow-hidden rounded-lg shadow-[0_8px_20px_-8px_rgba(0,0,0,0.45)] transition-[transform,box-shadow] duration-300 ease-out group-hover:z-10 group-hover:[transform:perspective(900px)_rotateX(5deg)_rotateY(-7deg)_scale(1.05)] group-hover:shadow-[0_22px_38px_-12px_rgba(0,0,0,0.6),0_0_0_2px_var(--primary),0_0_26px_-4px_var(--primary)]'
+              ? 'relative overflow-hidden rounded-lg shadow-[0_6px_18px_-8px_rgba(0,0,0,0.3)] transition-[transform,box-shadow] duration-300 ease-out group-hover:z-10 group-hover:[transform:translateY(-4px)_scale(1.03)] group-hover:shadow-[0_28px_56px_-20px_rgba(0,0,0,0.5),0_0_0_1.5px_var(--primary)]'
               : 'relative overflow-hidden rounded-lg'
           }
         >

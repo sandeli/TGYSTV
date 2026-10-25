@@ -57,6 +57,16 @@ const formatDate = (dateStr: string) => {
 // 版本更新历史
 const VERSION_UPDATES: VersionUpdate[] = [
   {
+    version: '2.35.1',
+    title: '图片墙效果收敛：去翻转、投影柔化',
+    date: formatDate('2026-10-25'),
+    features: [],
+    fixes: [
+      '豆瓣图片墙的 hover 效果按反馈收敛：去掉透视翻转（不好看），只保留整卡轻轻抬起放大；投影改为大面积柔化扩散的软影（不再是硬边小影），高亮边框收为一条主色细边、去掉外层光晕——整体更简洁大气。',
+    ],
+    breaking: [],
+  },
+  {
     version: '2.35.0',
     title: '豆瓣图片墙立体效果',
     date: formatDate('2026-10-25'),
