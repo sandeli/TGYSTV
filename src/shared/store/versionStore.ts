@@ -57,6 +57,16 @@ const formatDate = (dateStr: string) => {
 // 版本更新历史
 const VERSION_UPDATES: VersionUpdate[] = [
   {
+    version: '2.30.1',
+    title: '首页搜索关键字优化',
+    date: formatDate('2026-10-25'),
+    features: [],
+    fixes: [
+      '首页补齐搜索引擎信息：标题与描述带上 TGYS 品牌词、添加 keywords 与 Open Graph 信息、结构化站点名（TGYS / tgys / TGYS影视）以及 robots.txt，方便在谷歌搜索 tgys 时找到本站（还需站长在 Google Search Console 提交收录）。',
+    ],
+    breaking: [],
+  },
+  {
     version: '2.30.0',
     title: '源卡片加全站快捷开关',
     date: formatDate('2026-10-25'),
