@@ -110,6 +110,16 @@ describe('applyAccountMirror 账户源镜像', () => {
     expect(result.accountSourceIds).toEqual(['managed_sitewide', 'acct_a'])
   })
 
+  it('未登记的新源与镜像同 id 时只剩一份（刚添加就刷新不重复）', () => {
+    // 本地刚添加的源 X 还没登记进 accountSourceIds，服务端已存回同一 id 的副本
+    const local = [src({ id: 'm1' }), src({ id: 'x', name: '新源' }), src({ id: 'm2' })]
+    const incoming = [src({ id: 'a1' }), src({ id: 'x', name: '新源' })]
+    const { videoAPIs, accountSourceIds } = applyAccountMirror(local, ['a1'], incoming, [])
+    expect(videoAPIs.filter(s => s.id === 'x')).toHaveLength(1)
+    expect(videoAPIs.map(s => s.id)).toEqual(['m1', 'm2', 'a1', 'x'])
+    expect(accountSourceIds).toEqual(['a1', 'x'])
+  })
+
   it('服务端删掉的个人源在镜像后消失（删除跨设备传播）', () => {
     const current = [src({ id: 'acct_a' }), src({ id: 'acct_b' })]
     const result = applyAccountMirror(current, ['acct_a', 'acct_b'], [src({ id: 'acct_a' })], [])

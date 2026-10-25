@@ -57,6 +57,16 @@ const formatDate = (dateStr: string) => {
 // 版本更新历史
 const VERSION_UPDATES: VersionUpdate[] = [
   {
+    version: '2.30.2',
+    title: '修复刚添加的源刷新后重复',
+    date: formatDate('2026-10-25'),
+    features: [],
+    fixes: [
+      '修复登录用户手动添加一个源后刷新页面会显示两个相同源的问题：新源还没登记到账户清单时，同步镜像把服务端那份又插入了一遍。现在插入前会先摘掉本地同 id 的未登记副本，添加后刷新也只显示一个。',
+    ],
+    breaking: [],
+  },
+  {
     version: '2.30.1',
     title: '首页搜索关键字优化',
     date: formatDate('2026-10-25'),

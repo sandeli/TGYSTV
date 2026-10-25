@@ -123,7 +123,11 @@ export function applyAccountMirror(
   const incomingLocal = incoming.filter(s => !managed.has(s.id))
   const prevLocalIds = new Set(prevAccountSourceIds.filter(id => !managed.has(id)))
   const insertAt = videoAPIs.findIndex(s => prevLocalIds.has(s.id))
-  const rest = videoAPIs.filter(s => !prevLocalIds.has(s.id))
+  // 即将插入的源若已在本地以「未登记手动源」形态存在（刚添加、还没被登记进
+  // accountSourceIds 就刷新了），旧副本也要摘掉，否则同一 id 会出现两条：
+  // 一条是本地的、一条是刚镜像进来的（下次刷新登记生效后又会自愈为一条）
+  const incomingLocalIds = new Set(incomingLocal.map(s => s.id))
+  const rest = videoAPIs.filter(s => !prevLocalIds.has(s.id) && !incomingLocalIds.has(s.id))
   const at = insertAt === -1 ? rest.length : Math.min(insertAt, rest.length)
   return {
     videoAPIs: [...rest.slice(0, at), ...incomingLocal, ...rest.slice(at)],
