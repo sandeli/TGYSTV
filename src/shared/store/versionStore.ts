@@ -57,6 +57,16 @@ const formatDate = (dateStr: string) => {
 // 版本更新历史
 const VERSION_UPDATES: VersionUpdate[] = [
   {
+    version: '2.30.3',
+    title: '修复国内特斯拉车机免登录识别',
+    date: formatDate('2026-10-25'),
+    features: [],
+    fixes: [
+      '车机自动免登录识别不到国内特斯拉：其实测浏览器标识里没有任何特斯拉字样，只是一串通用 Linux Chrome 签名，之前的识别规则永远命不中。现在按这串签名放行（样本已加入测试）。注意：桌面版 Linux Chrome 的标识与它完全一致、也会被当成车机免登录；如有用户用 Linux 电脑访问，请关闭后台的车机免登录开关。',
+    ],
+    breaking: [],
+  },
+  {
     version: '2.30.2',
     title: '修复刚添加的源刷新后重复',
     date: formatDate('2026-10-25'),

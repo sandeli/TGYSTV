@@ -23,6 +23,15 @@ describe('isCarBrowserUA 车机浏览器识别', () => {
     ).toBe(true)
   })
 
+  it('识别国内固件特斯拉车机（UA 无 Tesla 标记，只有通用 Linux Chrome 签名）', () => {
+    // 2026-10-25 用户在车机上打开 httpbin.org/user-agent 的实测样本，一字不差
+    expect(
+      isCarBrowserUA(
+        'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36',
+      ),
+    ).toBe(true)
+  })
+
   it('普通浏览器不误判', () => {
     expect(
       isCarBrowserUA(
