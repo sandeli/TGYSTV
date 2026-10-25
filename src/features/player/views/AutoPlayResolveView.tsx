@@ -9,6 +9,7 @@ import { getTitleMatchTier } from '@/features/search/hooks/directSearch.utils'
 import { buildDoubanSearchPath } from '@/shared/lib/douban'
 import { buildCmsPlayPath } from '@/shared/lib/routes'
 import {
+  cacheResolveCandidates,
   cacheResolveProbes,
   compareProbeResults,
   probePlayback,
@@ -41,12 +42,17 @@ export interface AutoPlayCandidate {
 }
 
 /** 候选排序：档位优先，其次按真实吞吐测速口径（纯函数，可测） */
-export function pickBestCandidate(candidates: AutoPlayCandidate[]): AutoPlayCandidate | null {
-  if (candidates.length === 0) return null
+/** 候选按优劣排名（档位优先、再测速口径）：选源取第一名，播放页自动换源名单也用这个顺序 */
+export function rankAutoPlayCandidates(candidates: AutoPlayCandidate[]): AutoPlayCandidate[] {
   return [...candidates].sort((a, b) => {
     if (a.tier !== b.tier) return a.tier - b.tier
     return compareProbeResults(a.probe, b.probe)
-  })[0]
+  })
+}
+
+export function pickBestCandidate(candidates: AutoPlayCandidate[]): AutoPlayCandidate | null {
+  if (candidates.length === 0) return null
+  return rankAutoPlayCandidates(candidates)[0]
 }
 
 const SEARCH_WORKERS = 4
@@ -143,6 +149,16 @@ export default function AutoPlayResolveView() {
           }
         }
         if (probedEntries.size > 0) cacheResolveProbes(probedEntries)
+        // 完整候选排名也缓存：播放页起播失败（详情 503 等）时按这个顺序自动换源
+        cacheResolveCandidates(
+          best.sourceId,
+          best.vodId,
+          rankAutoPlayCandidates(candidates).map(c => ({
+            sourceCode: c.sourceId,
+            sourceName: c.sourceName,
+            vodId: c.vodId,
+          })),
+        )
         // 选源交代：让用户（和排障）一眼看出解析页选出了哪个源、测速多少
         toast.success(
           `已为你选源：${best.sourceName}${best.probe ? ` · 起播 ${best.probe.startupMs} ms · 吞吐 ${best.probe.throughputMbps} Mbps` : ' · 未测得速度'}`,

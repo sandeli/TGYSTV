@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { derivePlayerViewState, shouldFallbackEpisodeToFirst } from './playerViewState'
+import {
+  derivePlayerViewState,
+  pickFailoverOption,
+  shouldFallbackEpisodeToFirst,
+} from './playerViewState'
 
 describe('derivePlayerViewState', () => {
   it('错误存在时不应显示 loading', () => {
@@ -93,5 +97,37 @@ describe('shouldFallbackEpisodeToFirst', () => {
 
   it('分集未越界时不应回落', () => {
     expect(shouldFallbackEpisodeToFirst(20, 10)).toBe(false)
+  })
+})
+
+describe('pickFailoverOption 起播失败自动换源挑选', () => {
+  const options = [
+    { sourceCode: 'cur', bestVodId: 'v0' },
+    { sourceCode: 'a', bestVodId: 'v1' },
+    { sourceCode: 'b', bestVodId: 'v2' },
+  ]
+
+  it('按排名挑第一个非当前、未试过的源', () => {
+    expect(pickFailoverOption(options, 'cur', [])?.sourceCode).toBe('a')
+    expect(pickFailoverOption(options, 'cur', ['a'])?.sourceCode).toBe('b')
+  })
+
+  it('全部试过或只剩当前源时返回 null', () => {
+    expect(pickFailoverOption(options, 'cur', ['a', 'b'])).toBeNull()
+    expect(pickFailoverOption([options[0]], 'cur', [])).toBeNull()
+    expect(pickFailoverOption([], 'cur', [])).toBeNull()
+  })
+
+  it('没有资源 id 的候选跳过', () => {
+    expect(
+      pickFailoverOption(
+        [
+          { sourceCode: 'x', bestVodId: '' },
+          { sourceCode: 'y', bestVodId: 'v9' },
+        ],
+        'cur',
+        [],
+      )?.sourceCode,
+    ).toBe('y')
   })
 })

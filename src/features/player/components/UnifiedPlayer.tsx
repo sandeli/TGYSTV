@@ -62,11 +62,13 @@ import {
   computeMiniPlayerRect,
   derivePlayerViewState,
   getNextTmdbSelectionLock,
+  pickFailoverOption,
   resolvePlayerSelection,
   shouldFallbackEpisodeToFirst,
   type TmdbSelectionLock,
   validatePlayerRoute,
 } from '@/features/player/lib'
+import { readResolveCandidates } from '@/shared/lib/playbackProbe'
 
 interface ArtplayerWithHls extends Artplayer {
   hls?: Hls
@@ -238,6 +240,15 @@ export default function UnifiedPlayer() {
   const [detail, setDetail] = useState<DetailResult | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  // 起播失败（详情被源站 503 / HLS 清单致命错误等）：先不展示错误页，由自动换源逻辑接管，
+  // 有备选源就自动换、换不动才把失败消息交还给错误页/提示
+  const [startFailure, setStartFailure] = useState<{ sourceCode: string; message: string } | null>(
+    null,
+  )
+  const startFailureRef = useRef<{ sourceCode: string; message: string } | null>(null)
+  // 本源是否已经真正开始播放：起播后的中途错误不触发自动换源（有分片重试兜底）
+  const hasPlayedRef = useRef(false)
+  const resolvedSourceRef = useRef<string | null>(null)
   const [isDetailRefreshing, setIsDetailRefreshing] = useState(false)
   const [transientNotices, setTransientNotices] = useState<PlayerTransientNotice[]>([])
   const [dismissedBetterNoticeKeys, setDismissedBetterNoticeKeys] = useState<string[]>([])
@@ -365,6 +376,17 @@ export default function UnifiedPlayer() {
     () => videoAPIs.find(api => api.id === resolvedSourceCode),
     [resolvedSourceCode, videoAPIs],
   )
+
+  useEffect(() => {
+    startFailureRef.current = startFailure
+  }, [startFailure])
+
+  // 换源后重置起播失败状态：新源重新获得自动换源机会，也不再算「已播过」
+  useEffect(() => {
+    resolvedSourceRef.current = resolvedSourceCode
+    hasPlayedRef.current = false
+    setStartFailure(null)
+  }, [resolvedSourceCode, resolvedVodId])
 
   useEffect(() => {
     if (!isTmdbRoute) {
@@ -536,6 +558,7 @@ export default function UnifiedPlayer() {
       else setLoading(true)
       setError(null)
 
+      let failoverArmed = false
       try {
         if (!sourceConfig) {
           throw new Error('未找到对应视频源配置，请检查源设置')
@@ -555,10 +578,18 @@ export default function UnifiedPlayer() {
         if (!canCommit()) return
         console.error('获取视频详情失败:', fetchError)
         setDetail(null)
-        setError(fetchError instanceof Error ? fetchError.message : '获取视频详情失败')
+        const message = fetchError instanceof Error ? fetchError.message : '获取视频详情失败'
+        if (isCmsRoute && resolvedSourceCode && !hasPlayedRef.current) {
+          // CMS 直达路线：失败先交给自动换源（备选多半在解析排名里），错误页暂不展示、
+          // 骨架屏保持；换不动时再由自动换源逻辑把这条消息交还错误页
+          failoverArmed = true
+          setStartFailure({ sourceCode: resolvedSourceCode, message })
+        } else {
+          setError(message)
+        }
       } finally {
         if (canCommit()) {
-          setLoading(false)
+          if (!failoverArmed) setLoading(false)
           setIsDetailRefreshing(false)
         }
       }
@@ -572,6 +603,7 @@ export default function UnifiedPlayer() {
   }, [
     cmsClient,
     hasExplicitTmdbSelection,
+    isCmsRoute,
     isTmdbRoute,
     routeError,
     resolvedSourceCode,
@@ -844,6 +876,12 @@ export default function UnifiedPlayer() {
                     : {}),
                 }
                 const hls = new HlsClass(hlsConfig)
+                hls.on(HlsClass.Events.ERROR, (_event, data) => {
+                  // 起播前的致命错误（清单 503 等）：交给自动换源处理；已开播的中途错误不掺和
+                  if (!data?.fatal || hasPlayedRef.current || startFailureRef.current) return
+                  const code = resolvedSourceRef.current
+                  if (code) setStartFailure({ sourceCode: code, message: '视频加载失败' })
+                })
                 hls.loadSource(url)
                 hls.attachMedia(video)
                 artWithHls.hls = hls
@@ -1048,6 +1086,10 @@ export default function UnifiedPlayer() {
     }
 
     art.on('video:play', addHistorySnapshot)
+    art.on('video:playing', () => {
+      // 真正开始播放后，中途错误不再触发自动换源
+      hasPlayedRef.current = true
+    })
     art.on('video:pause', addHistorySnapshot)
     art.on('video:ended', () => {
       addHistorySnapshot()
@@ -1438,6 +1480,92 @@ export default function UnifiedPlayer() {
     },
     [handleSourceChange, isTmdbRoute, navigate, selectedEpisode, showPlayerNotice, sourceSpeed.options],
   )
+
+  // 起播失败自动换源：已选定的源在真正开播前失败（详情被源站 503、清单致命错误等）时，
+  // 按排名自动换到下一个没试过的源，最多自动换 2 次（算上最初的源共试 3 个）；
+  // 换源链经路由 state 传递，手动换源不带 state、链条自动清零
+  const MAX_AUTO_FAILOVER = 2
+  const failoverChain = useMemo(() => {
+    const raw = (
+      location.state as { autoFailover?: { tried?: unknown; count?: unknown } } | null
+    )?.autoFailover
+    return {
+      tried: Array.isArray(raw?.tried)
+        ? raw.tried.filter((t): t is string => typeof t === 'string')
+        : [],
+      count: typeof raw?.count === 'number' && raw.count > 0 ? Math.floor(raw.count) : 0,
+    }
+  }, [location.state])
+
+  useEffect(() => {
+    if (!isCmsRoute || !startFailure) return
+    if (startFailure.sourceCode !== resolvedSourceCode || !resolvedVodId) return
+
+    const giveUp = () => {
+      // 有详情（信息已加载、只是流打不开）：只弹提示，播放器与换源条都在，用户可手动换；
+      // 没详情：把原始失败消息交还错误页，并结束骨架屏
+      if (detailRef.current) {
+        showPlayerNotice('当前源加载失败，请手动换个源试试')
+      } else {
+        setError(startFailure.message)
+        setLoading(false)
+      }
+      setStartFailure(null)
+    }
+
+    if (hasPlayedRef.current || failoverChain.count >= MAX_AUTO_FAILOVER) {
+      giveUp()
+      return
+    }
+
+    // 候选池：播放页已发现并测速排名的优先，其次解析页缓存的候选排名
+    // （详情被 503 打死时跨源发现跑不起来，只能靠解析排名兜底）
+    const pool = [...sourceSpeed.options]
+    const cached = readResolveCandidates(resolvedSourceCode, resolvedVodId)
+    if (cached) {
+      for (const entry of cached) {
+        if (!pool.some(o => o.sourceCode === entry.sourceCode)) {
+          pool.push({
+            sourceCode: entry.sourceCode,
+            sourceName: entry.sourceName,
+            bestVodId: entry.vodId,
+            bestScore: 0,
+          })
+        }
+      }
+    }
+    const next = pickFailoverOption(pool, resolvedSourceCode, failoverChain.tried)
+    if (next) {
+      navigate(buildCmsPlayPath(next.sourceCode, next.bestVodId, selectedEpisode), {
+        replace: true,
+        state: {
+          autoFailover: {
+            tried: [...failoverChain.tried, resolvedSourceCode],
+            count: failoverChain.count + 1,
+          },
+        },
+      })
+      showPlayerNotice(
+        `「${sourceConfig?.name ?? '当前源'}」加载失败，已自动换到「${next.sourceName}」`,
+      )
+      setStartFailure(null)
+      return
+    }
+    // 还没有候选：跨源发现还在跑就继续等（options/isWorking 变化会重跑本 effect）；跑完仍无候选则放弃
+    if (!sourceSpeed.isWorking) giveUp()
+  }, [
+    isCmsRoute,
+    startFailure,
+    resolvedSourceCode,
+    resolvedVodId,
+    failoverChain,
+    sourceSpeed.options,
+    sourceSpeed.isWorking,
+    navigate,
+    selectedEpisode,
+    sourceConfig,
+    showPlayerNotice,
+  ])
 
   const betterSourceNoticeKey = useMemo(() => {
     if (!isTmdbRoute || !bestSourceOption) return ''

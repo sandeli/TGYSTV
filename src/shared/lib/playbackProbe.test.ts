@@ -1,10 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
+  cacheResolveCandidates,
   cacheResolveProbes,
   compareProbeResults,
   estimateBitrateMbps,
   parseHlsPlaylist,
   probePlayback,
+  readResolveCandidates,
   readResolveProbe,
   type CachedSourceProbe,
   type PlaybackProbeResult,
@@ -195,5 +197,15 @@ describe('cacheResolveProbes / readResolveProbe 解析测速缓存', () => {
     cacheResolveProbes(new Map([['srcB:vod9', entry(8)]]))
     expect(readResolveProbe('srcA', 'vod1')).toBeUndefined()
     expect(readResolveProbe('srcB', 'vod9')?.probe.throughputMbps).toBe(8)
+  })
+
+  it('候选排名缓存：只有用胜出源的键才能读到整份排名', () => {
+    cacheResolveCandidates('win', 'vodW', [
+      { sourceCode: 'win', sourceName: '胜出源', vodId: 'vodW' },
+      { sourceCode: 'alt', sourceName: '备选源', vodId: 'vodA' },
+    ])
+    expect(readResolveCandidates('win', 'vodW')?.map(c => c.sourceCode)).toEqual(['win', 'alt'])
+    expect(readResolveCandidates('alt', 'vodA')).toBeUndefined()
+    expect(readResolveCandidates('win', 'other')).toBeUndefined()
   })
 })

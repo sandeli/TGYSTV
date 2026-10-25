@@ -20,6 +20,30 @@ export function shouldFallbackEpisodeToFirst(episodesLength: number, selectedEpi
   return selectedEpisode >= episodesLength
 }
 
+export interface FailoverOptionLike {
+  sourceCode: string
+  bestVodId?: string
+}
+
+/**
+ * 起播失败自动换源：在已按优劣排名的候选列表里，挑第一个可换的源——
+ * 跳过当前源、已试过的源与没有资源 id 的候选。没有可换的返回 null。
+ */
+export function pickFailoverOption<T extends FailoverOptionLike>(
+  options: T[],
+  currentSourceCode: string | null,
+  triedSourceCodes: string[],
+): T | null {
+  const tried = new Set(triedSourceCodes)
+  for (const option of options) {
+    if (!option.bestVodId) continue
+    if (option.sourceCode === currentSourceCode) continue
+    if (tried.has(option.sourceCode)) continue
+    return option
+  }
+  return null
+}
+
 export function derivePlayerViewState(params: DerivePlayerViewStateParams): PlayerViewStateResult {
   const hasPendingLoad =
     params.loading ||

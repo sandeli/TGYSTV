@@ -63,6 +63,39 @@ export function readResolveProbe(sourceCode: string, vodId: string): CachedSourc
   return resolveProbeCache.get(`${sourceCode}:${vodId}`)
 }
 
+/**
+ * 解析页的完整候选排名缓存（供播放页起播失败时自动换源）：以胜出源的 源:vod 为键，
+ * 存当次全部候选的排名顺序。播放页详情若被源站 503 打死，连片名都拿不到、跨源发现
+ * 无从启动，这份排名就是当时唯一的换源名单；键不匹配（不是从解析页来的）读不到。
+ */
+export interface ResolveCandidateEntry {
+  sourceCode: string
+  sourceName: string
+  vodId: string
+}
+
+let resolveCandidatesCache: { winnerKey: string; candidates: ResolveCandidateEntry[] } | null = null
+
+export function cacheResolveCandidates(
+  winnerSourceCode: string,
+  winnerVodId: string,
+  candidates: ResolveCandidateEntry[],
+): void {
+  resolveCandidatesCache = {
+    winnerKey: `${winnerSourceCode}:${winnerVodId}`,
+    candidates: [...candidates],
+  }
+}
+
+export function readResolveCandidates(
+  sourceCode: string,
+  vodId: string,
+): ResolveCandidateEntry[] | undefined {
+  if (!resolveCandidatesCache) return undefined
+  if (resolveCandidatesCache.winnerKey !== `${sourceCode}:${vodId}`) return undefined
+  return resolveCandidatesCache.candidates
+}
+
 export interface HlsVariant {
   url: string
   bandwidth?: number
