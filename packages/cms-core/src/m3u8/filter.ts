@@ -9,6 +9,13 @@ const SHORT_AD_GROUP_MAX_SECONDS = 60
 const SHORT_AD_GROUP_MAX_RATIO = 0.1
 /** 保底：候选广告总时长超过全片该比例时整体放弃移除（判定不可靠，宁可不删） */
 const BAIL_REMOVED_RATIO = 0.4
+/** SCTE-35 广告窗组判定：整组分片都落在 CUE-OUT..CUE-IN 窗内且总时长不超过该上限（秒）视为广告 */
+const CUE_AD_GROUP_MAX_SECONDS = 300
+/** 广告地址特征：关键词须落在路径/文件名分隔边界上，避免 shadow、adventure 之类误判（借鉴 MoonTV 的 ad-filter） */
+const AD_URL_PATTERN =
+  /(^|[/_.-])(ad|ads|adv|advert|advertisement|advertising|guanggao|preroll|pre-roll|midroll|mid-roll|commercial|cueout|cue-out)([/_.-]|$)/i
+/** 广告地址判定：组内只有部分分片命中特征词时，组总时长不超过该阈值（秒）才按广告处理 */
+const AD_URL_PARTIAL_MAX_SECONDS = 90
 
 interface SegmentBlock {
   /** EXTINF 之前附着的标签行（如 #EXT-X-KEY / #EXT-X-MAP），不含 discontinuity */
@@ -20,6 +27,8 @@ interface SegmentBlock {
   duration: number
   /** 该分片前有 discontinuity 分隔，即它开启一个新组 */
   startsGroup: boolean
+  /** 该分片是否落在 SCTE-35 广告窗内（#EXT-X-CUE-OUT 之后、#EXT-X-CUE-IN 之前） */
+  inCueWindow: boolean
 }
 
 interface SegmentGroup {
@@ -32,6 +41,21 @@ interface SegmentGroup {
 /** 是否是 discontinuity 分隔行（精确匹配整行，避免误伤 #EXT-X-DISCONTINUITY-SEQUENCE 头） */
 function isDiscontinuityLine(line: string): boolean {
   return line.trim() === '#EXT-X-DISCONTINUITY'
+}
+
+/** SCTE-35 广告窗开启行（前缀匹配同时覆盖 #EXT-X-CUE-OUT 与 #EXT-X-CUE-OUT-CONT） */
+function isCueOutLine(line: string): boolean {
+  return line.startsWith('#EXT-X-CUE-OUT')
+}
+
+/** SCTE-35 广告窗关闭行 */
+function isCueInLine(line: string): boolean {
+  return line.startsWith('#EXT-X-CUE-IN')
+}
+
+/** CUE 标记行（开启/关闭/续接都算）：移除广告后残留在保留分片上的标记应一并清掉 */
+function isCueLine(line: string): boolean {
+  return isCueOutLine(line) || isCueInLine(line)
 }
 
 function segmentHost(uri: string): string {
@@ -55,8 +79,17 @@ function parseMediaPlaylist(content: string): {
   const firstExtinf = lines.findIndex(line => line.startsWith('#EXTINF'))
   if (firstExtinf === -1) return null
 
+  // SCTE-35 广告窗状态：CUE-OUT（含 CUE-OUT-CONT）开启、CUE-IN 关闭；
+  // 头部行里也可能出现 CUE-OUT（片头广告从首个分片起就在窗内），一并扫描
+  let cueWindow = false
+  const trackCueLine = (line: string): void => {
+    if (isCueOutLine(line)) cueWindow = true
+    else if (isCueInLine(line)) cueWindow = false
+  }
+
   const header: string[] = []
   for (let i = 0; i < firstExtinf; i += 1) {
+    trackCueLine(lines[i])
     if (!isDiscontinuityLine(lines[i])) header.push(lines[i])
   }
 
@@ -75,6 +108,7 @@ function parseMediaPlaylist(content: string): {
         midTags: [],
         duration: Number.parseFloat(line.slice(line.indexOf(':') + 1)) || 0,
         startsGroup: nextStartsGroup,
+        inCueWindow: cueWindow,
       }
       pendingPreTags = []
       nextStartsGroup = false
@@ -82,6 +116,7 @@ function parseMediaPlaylist(content: string): {
       // 分隔标记本身不保留（与旧行为一致），只记录分组边界
       nextStartsGroup = true
     } else if (line.startsWith('#')) {
+      trackCueLine(line)
       if (current) current.midTags.push(line)
       else pendingPreTags.push(line)
     } else if (line.trim() === '') {
@@ -143,6 +178,8 @@ function stripDiscontinuityMarkers(content: string): string {
  * 采集源的插播广告在清单里呈「正片 → #EXT-X-DISCONTINUITY → 广告组 → 标记 → 正片」
  * 结构。本过滤器按标记分组后整组移除广告分片，而非旧版只删标记行（广告照播）：
  * - 异域名组：组内分片主域名与正片（总时长最长的组）主域名不同 → 广告（片头/片尾/插播均可）
+ * - SCTE-35 广告窗组：整组分片都落在 #EXT-X-CUE-OUT..#EXT-X-CUE-IN 窗内且 ≤300 秒 → 广告
+ * - 广告地址组：整组分片地址都带广告特征词，或组 ≤90 秒且部分命中 → 广告
  * - 短分隔组：位于片头/片尾/中间、被标记分隔、总时长 ≤60 秒且 ≤全片 10% 的组 → 广告
  *   （片头是 QQ 群口播等招商段最常见的出现位置，旧规则只删中间组、会把它漏掉）
  *
@@ -172,6 +209,24 @@ export function createDefaultAdFilter(): M3u8Filter {
     for (const group of groups) {
       if (group === contentGroup) continue
       if (contentHost && group.dominantHost && group.dominantHost !== contentHost) {
+        adGroups.add(group)
+        continue
+      }
+      // SCTE-35 广告窗：整组分片都落在 CUE-OUT..CUE-IN 内即广告（源站自带的显式标记，
+      // 同域名、同长度也认）；300 秒上限防异常源把正片整段标进窗内
+      if (
+        group.segments.every(s => s.inCueWindow) &&
+        group.duration <= CUE_AD_GROUP_MAX_SECONDS
+      ) {
+        adGroups.add(group)
+        continue
+      }
+      // 广告地址特征：整组分片地址都带广告词，或组较短且有部分命中
+      const adUrlHits = group.segments.filter(s => AD_URL_PATTERN.test(s.uri)).length
+      if (
+        adUrlHits > 0 &&
+        (adUrlHits === group.segments.length || group.duration <= AD_URL_PARTIAL_MAX_SECONDS)
+      ) {
         adGroups.add(group)
         continue
       }
@@ -205,9 +260,15 @@ export function createDefaultAdFilter(): M3u8Filter {
 
     const out: string[] = [...outHeader]
     for (const segment of keptSegments) {
-      out.push(...segment.preTags, segment.extinf, ...segment.midTags, segment.uri)
+      // 保留分片上残留的 CUE 标记（多为广告窗的 CUE-IN）随广告一并清掉，KEY/MAP 等标签不动
+      out.push(
+        ...segment.preTags.filter(line => !isCueLine(line)),
+        segment.extinf,
+        ...segment.midTags.filter(line => !isCueLine(line)),
+        segment.uri,
+      )
     }
-    out.push(...trailer)
+    out.push(...trailer.filter(line => !isCueLine(line)))
     return out.join('\n')
   }
 }

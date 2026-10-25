@@ -169,6 +169,82 @@ describe('createDefaultAdFilter 段级广告移除', () => {
     }
   })
 
+  it('移除 SCTE-35 CUE 广告窗组（同域名、时长超过短组阈值，只有 CUE 信号能抓）', () => {
+    const parts = [...HEADER]
+    for (let i = 1; i <= 20; i += 1) parts.push(seg(10, `https://cdn.main.com/v/${i}.ts`))
+    parts.push('#EXT-X-DISCONTINUITY', '#EXT-X-CUE-OUT:DURATION=120')
+    for (let i = 1; i <= 12; i += 1) {
+      if (i === 2) parts.push('#EXT-X-CUE-OUT-CONT:DURATION=120,ELAPSED=10')
+      parts.push(seg(10, `https://cdn.main.com/mid/${i}.ts`))
+    }
+    parts.push('#EXT-X-CUE-IN', '#EXT-X-DISCONTINUITY')
+    for (let i = 21; i <= 40; i += 1) parts.push(seg(10, `https://cdn.main.com/v/${i}.ts`))
+    parts.push('#EXT-X-ENDLIST', '')
+    const out = filter(parts.join('\n'))
+    expect(out).not.toContain('/mid/')
+    expect(out).toContain('https://cdn.main.com/v/1.ts')
+    expect(out).toContain('https://cdn.main.com/v/40.ts')
+    // 广告窗标记不残留
+    expect(out).not.toContain('#EXT-X-CUE')
+  })
+
+  it('CUE 广告窗超过 300 秒上限时不移除（防异常标记误伤正片）', () => {
+    const parts = [...HEADER]
+    for (let i = 1; i <= 20; i += 1) parts.push(seg(10, `https://cdn.main.com/v/${i}.ts`))
+    parts.push('#EXT-X-DISCONTINUITY', '#EXT-X-CUE-OUT:DURATION=400')
+    for (let i = 1; i <= 40; i += 1) parts.push(seg(10, `https://cdn.main.com/mid/${i}.ts`))
+    parts.push('#EXT-X-CUE-IN', '#EXT-X-DISCONTINUITY')
+    for (let i = 21; i <= 40; i += 1) parts.push(seg(10, `https://cdn.main.com/v/${i}.ts`))
+    parts.push('#EXT-X-ENDLIST', '')
+    const out = filter(parts.join('\n'))
+    expect(out).toContain('https://cdn.main.com/mid/1.ts')
+    expect(out).toContain('https://cdn.main.com/mid/40.ts')
+  })
+
+  it('移除整组广告地址组（同域名、时长超过短组阈值，全部命中广告词）', () => {
+    const parts = [...HEADER]
+    for (let i = 1; i <= 20; i += 1) parts.push(seg(10, `https://cdn.main.com/v/${i}.ts`))
+    parts.push('#EXT-X-DISCONTINUITY')
+    for (let i = 1; i <= 10; i += 1) parts.push(seg(10, `https://cdn.main.com/ad/seg${i}.ts`))
+    parts.push('#EXT-X-DISCONTINUITY')
+    for (let i = 21; i <= 40; i += 1) parts.push(seg(10, `https://cdn.main.com/v/${i}.ts`))
+    parts.push('#EXT-X-ENDLIST', '')
+    const out = filter(parts.join('\n'))
+    expect(out).not.toContain('/ad/seg')
+    expect(out).toContain('https://cdn.main.com/v/40.ts')
+  })
+
+  it('较短组部分分片带广告地址（preroll）时整组移除', () => {
+    const parts = [...HEADER]
+    for (let i = 1; i <= 40; i += 1) parts.push(seg(10, `https://cdn.main.com/v/${i}.ts`))
+    parts.push('#EXT-X-DISCONTINUITY')
+    for (let i = 1; i <= 8; i += 1) {
+      parts.push(seg(10, i <= 3 ? `https://cdn.main.com/preroll/${i}.ts` : `https://cdn.main.com/x/${i}.ts`))
+    }
+    parts.push('#EXT-X-DISCONTINUITY')
+    for (let i = 41; i <= 80; i += 1) parts.push(seg(10, `https://cdn.main.com/v/${i}.ts`))
+    parts.push('#EXT-X-ENDLIST', '')
+    const out = filter(parts.join('\n'))
+    expect(out).not.toContain('/preroll/')
+    expect(out).not.toContain('/x/')
+    expect(out).toContain('https://cdn.main.com/v/80.ts')
+  })
+
+  it('广告词边界防误判：shadow、adventure 等正常地址不删', () => {
+    const parts = [...HEADER]
+    for (let i = 1; i <= 20; i += 1) parts.push(seg(10, `https://cdn.main.com/v/${i}.ts`))
+    parts.push('#EXT-X-DISCONTINUITY')
+    for (let i = 1; i <= 10; i += 1) {
+      parts.push(seg(10, i % 2 ? `https://cdn.main.com/shadow/${i}.ts` : `https://cdn.main.com/adventure/${i}.ts`))
+    }
+    parts.push('#EXT-X-DISCONTINUITY')
+    for (let i = 21; i <= 40; i += 1) parts.push(seg(10, `https://cdn.main.com/v/${i}.ts`))
+    parts.push('#EXT-X-ENDLIST', '')
+    const out = filter(parts.join('\n'))
+    expect(out).toContain('https://cdn.main.com/shadow/1.ts')
+    expect(out).toContain('https://cdn.main.com/adventure/2.ts')
+  })
+
   it('空内容返回空串', () => {
     expect(filter('')).toBe('')
   })

@@ -57,6 +57,17 @@ const formatDate = (dateStr: string) => {
 // 版本更新历史
 const VERSION_UPDATES: VersionUpdate[] = [
   {
+    version: '2.31.0',
+    title: '广告过滤新增标记与广告地址识别',
+    date: formatDate('2026-10-25'),
+    features: [
+      '播放广告过滤新增两类识别信号（借鉴 MoonTV 的过滤思路）：一是 SCTE-35 广告标记——源站清单里用 CUE-OUT/CUE-IN 圈出的广告段整段删除，哪怕与正片同域名、同长度也拦得住，并清掉残留标记；二是分片地址里的广告特征词（如 ad、preroll、guanggao 等出现在路径分隔处），整组命中、或较短的组部分命中时整组删除。',
+      '两类新信号都带保险：CUE 广告段超过 300 秒不删（防异常源误标正片）、广告词按分隔边界匹配（shadow、adventure 这类正常地址不会误伤），且仍受原有总删除不超全片 40% 的保底约束。',
+    ],
+    fixes: [],
+    breaking: [],
+  },
+  {
     version: '2.30.4',
     title: '广告过滤加强：片头片尾短广告也删',
     date: formatDate('2026-10-25'),
