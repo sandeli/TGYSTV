@@ -3,9 +3,9 @@
  */
 export type M3u8Filter = (content: string) => string
 
-/** 广告组判定：被标记包夹的中间组总时长不超过该阈值（秒）视为插播广告 */
+/** 广告组判定：被标记分隔的短组总时长不超过该阈值（秒）视为广告（片头/片尾/插播） */
 const SHORT_AD_GROUP_MAX_SECONDS = 60
-/** 广告组判定：中间短组还须不超过全片总时长的该比例，避免把正片短段落误删 */
+/** 广告组判定：短组还须不超过全片总时长的该比例，避免把正片短段落误删（短片尤其重要） */
 const SHORT_AD_GROUP_MAX_RATIO = 0.1
 /** 保底：候选广告总时长超过全片该比例时整体放弃移除（判定不可靠，宁可不删） */
 const BAIL_REMOVED_RATIO = 0.4
@@ -143,7 +143,8 @@ function stripDiscontinuityMarkers(content: string): string {
  * 采集源的插播广告在清单里呈「正片 → #EXT-X-DISCONTINUITY → 广告组 → 标记 → 正片」
  * 结构。本过滤器按标记分组后整组移除广告分片，而非旧版只删标记行（广告照播）：
  * - 异域名组：组内分片主域名与正片（总时长最长的组）主域名不同 → 广告（片头/片尾/插播均可）
- * - 短包夹组：位于中间、被标记包夹、总时长 ≤60 秒且 ≤全片 10% 的组 → 插播广告
+ * - 短分隔组：位于片头/片尾/中间、被标记分隔、总时长 ≤60 秒且 ≤全片 10% 的组 → 广告
+ *   （片头是 QQ 群口播等招商段最常见的出现位置，旧规则只删中间组、会把它漏掉）
  *
  * 保底：仅处理带 #EXT-X-ENDLIST 的点播清单（直播清单回退旧行为）；候选总时长
  * 超过全片 40%、或会把分片删空时放弃移除、回退旧行为，绝不因过滤破坏播放。
@@ -168,21 +169,20 @@ export function createDefaultAdFilter(): M3u8Filter {
     const contentHost = contentGroup.dominantHost
 
     const adGroups = new Set<SegmentGroup>()
-    groups.forEach((group, index) => {
-      if (group === contentGroup) return
+    for (const group of groups) {
+      if (group === contentGroup) continue
       if (contentHost && group.dominantHost && group.dominantHost !== contentHost) {
         adGroups.add(group)
-        return
+        continue
       }
-      const isMiddle = index > 0 && index < groups.length - 1
+      // 短组不论位置（片头/片尾/插播）都按广告处理：片头恰是口播招商段最常见的位置
       if (
-        isMiddle &&
         group.duration <= SHORT_AD_GROUP_MAX_SECONDS &&
         group.duration <= totalDuration * SHORT_AD_GROUP_MAX_RATIO
       ) {
         adGroups.add(group)
       }
-    })
+    }
     if (adGroups.size === 0) return stripDiscontinuityMarkers(content)
 
     const removedDuration = [...adGroups].reduce((sum, g) => sum + g.duration, 0)

@@ -57,6 +57,16 @@ const formatDate = (dateStr: string) => {
 // 版本更新历史
 const VERSION_UPDATES: VersionUpdate[] = [
   {
+    version: '2.30.4',
+    title: '广告过滤加强：片头片尾短广告也删',
+    date: formatDate('2026-10-25'),
+    features: [],
+    fixes: [
+      '加强播放广告过滤：以前只删正片中间的短广告组，片头/片尾的同域名短广告（最常见的片头口播招商段，如念群号那种独立小段）会漏掉；现在短分隔组不论位置都删。原有保底不变：短组须同时 ≤60 秒且 ≤全片 10%、总删除不超全片 40%，绝不误删正片；录进正片音轨里的口播属于正片本身，仍无法过滤，建议换源。',
+    ],
+    breaking: [],
+  },
+  {
     version: '2.30.3',
     title: '修复国内特斯拉车机免登录识别',
     date: formatDate('2026-10-25'),

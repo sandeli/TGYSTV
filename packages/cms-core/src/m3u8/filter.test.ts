@@ -124,6 +124,51 @@ describe('createDefaultAdFilter 段级广告移除', () => {
     expect(out).toContain('https://cdn.main.com/replay/9.ts')
   })
 
+  it('移除片头同域名短组（片头口播招商段最常见形态）', () => {
+    const parts = [...HEADER]
+    parts.push(seg(5, 'https://cdn.main.com/promo/1.ts'), seg(5, 'https://cdn.main.com/promo/2.ts'))
+    parts.push('#EXT-X-DISCONTINUITY')
+    for (let i = 1; i <= 40; i += 1) parts.push(seg(10, `https://cdn.main.com/v/${i}.ts`))
+    parts.push('#EXT-X-ENDLIST', '')
+    const out = filter(parts.join('\n'))
+    expect(out).not.toContain('/promo/')
+    expect(out).toContain('https://cdn.main.com/v/1.ts')
+    expect(out).toContain('#EXT-X-MEDIA-SEQUENCE:2')
+  })
+
+  it('移除片尾同域名短组（片尾招商段）', () => {
+    const parts = [...HEADER]
+    for (let i = 1; i <= 40; i += 1) parts.push(seg(10, `https://cdn.main.com/v/${i}.ts`))
+    parts.push('#EXT-X-DISCONTINUITY', seg(6, 'https://cdn.main.com/tail/1.ts'), seg(6, 'https://cdn.main.com/tail/2.ts'))
+    parts.push('#EXT-X-ENDLIST', '')
+    const out = filter(parts.join('\n'))
+    expect(out).not.toContain('/tail/')
+    expect(out).toContain('https://cdn.main.com/v/40.ts')
+  })
+
+  it('短片里片头短组占比过高时保留（防误删短视频的正片开头）', () => {
+    const content = [
+      ...HEADER,
+      seg(10, 'https://cdn.main.com/v/1.ts'),
+      seg(10, 'https://cdn.main.com/v/2.ts'),
+      seg(10, 'https://cdn.main.com/v/3.ts'),
+      '#EXT-X-DISCONTINUITY',
+      seg(10, 'https://cdn.main.com/v/4.ts'),
+      seg(10, 'https://cdn.main.com/v/5.ts'),
+      seg(10, 'https://cdn.main.com/v/6.ts'),
+      seg(10, 'https://cdn.main.com/v/7.ts'),
+      seg(10, 'https://cdn.main.com/v/8.ts'),
+      seg(10, 'https://cdn.main.com/v/9.ts'),
+      seg(10, 'https://cdn.main.com/v/10.ts'),
+      '#EXT-X-ENDLIST',
+      '',
+    ].join('\n')
+    const out = filter(content)
+    for (let i = 1; i <= 10; i += 1) {
+      expect(out).toContain(`https://cdn.main.com/v/${i}.ts`)
+    }
+  })
+
   it('空内容返回空串', () => {
     expect(filter('')).toBe('')
   })
