@@ -31,6 +31,10 @@ import {
   parseAccountSources,
   extractSiteWideSources,
   normalizeAccountSourcesForUser,
+  parseDeletedSourceIds,
+  resolveDeletedSourceIds,
+  saveUserSources,
+  getUserSourcesMeta,
   MASTER_USER_ID,
   type AuthEnv,
   type D1Database,
@@ -440,5 +444,99 @@ describe('登录失败锁定', () => {
     for (let i = 0; i < 5; i++) await recordLoginFailure(db, KEY, T0 + i)
     expect(await getLoginLockSeconds(db, KEY, T0 + 10)).toBeGreaterThan(0)
     expect(await getLoginLockSeconds(db, 'master-login:5.6.7.8', T0 + 10)).toBe(0)
+  })
+})
+
+describe('账号源已删名单（防复活）', () => {
+  it('parseDeletedSourceIds 清洗：去重、限长、订阅源 id 不入名单', () => {
+    expect(parseDeletedSourceIds(null)).toEqual([])
+    expect(parseDeletedSourceIds('x')).toEqual([])
+    expect(parseDeletedSourceIds([' a ', 'a', '', 'sub:s1:0', 42, 'b'])).toEqual(['a', 'b'])
+  })
+
+  it('resolveDeletedSourceIds：旧名单 ∪ 上报删除 − 明确重加', () => {
+    expect(resolveDeletedSourceIds(['old'], ['new1', 'new2'], ['new2'])).toEqual(['old', 'new1'])
+    expect(resolveDeletedSourceIds(['old'], [], ['old'])).toEqual([])
+    expect(resolveDeletedSourceIds([], null, undefined)).toEqual([])
+  })
+
+  /** user_sources + settings 的内存假实现（够 saveUserSources / getUserSourcesMeta 走通） */
+  function fakeUserSourcesDb() {
+    const rows = new Map<number, { sources: string; deleted_ids: string }>()
+    const settings = new Map<string, string>()
+    const db = {
+      prepare: (sql: string) => ({
+        bind: (...args: unknown[]) => ({
+          first: async () => {
+            if (sql.includes('FROM user_sources')) {
+              const row = rows.get(args[0] as number)
+              return row ? { sources: row.sources, deleted_ids: row.deleted_ids } : null
+            }
+            if (sql.includes('FROM settings')) {
+              const v = settings.get(args[0] as string)
+              return v === undefined ? null : { value: v }
+            }
+            return null
+          },
+          run: async () => {
+            if (sql.includes('INSERT INTO user_sources')) {
+              rows.set(args[0] as number, {
+                sources: args[1] as string,
+                deleted_ids: args[2] as string,
+              })
+            } else if (sql.includes('INSERT INTO settings')) {
+              settings.set(args[0] as string, args[1] as string)
+            }
+            return { success: true }
+          },
+        }),
+      }),
+    } as unknown as D1Database
+    return { db, rows, settings }
+  }
+
+  const entry = (id: string) => ({ id, name: `源${id}`, url: `https://${id}.example/api` })
+
+  it('删除进名单后，旧设备带着已删源整体回存也不会复活；明确重加才恢复', async () => {
+    const { db } = fakeUserSourcesDb()
+    await saveUserSources(db, 7, [entry('a'), entry('b')])
+    const afterDelete = await saveUserSources(db, 7, [entry('a')], { deletedIds: ['b'] })
+    expect(afterDelete.sources.map(s => s.id)).toEqual(['a'])
+    expect(afterDelete.deletedIds).toEqual(['b'])
+
+    // 旧设备拿着删除前的旧名单整体回存（没有删除上报）：b 被名单否决
+    const stale = await saveUserSources(db, 7, [entry('a'), entry('b')])
+    expect(stale.sources.map(s => s.id)).toEqual(['a'])
+    const meta = await getUserSourcesMeta(db, 7)
+    expect(meta.sources.map(s => s.id)).toEqual(['a'])
+    expect(meta.deletedIds).toEqual(['b'])
+
+    // 用户明确重新添加 b（revivedIds）：离开名单、恢复保存
+    const revived = await saveUserSources(db, 7, [entry('a'), entry('b')], { revivedIds: ['b'] })
+    expect(revived.sources.map(s => s.id)).toEqual(['a', 'b'])
+    expect(revived.deletedIds).toEqual([])
+  })
+
+  it('站长全站派生同样受名单约束：删掉的全站源不再分发', async () => {
+    const { db, settings } = fakeUserSourcesDb()
+    const wide = { ...entry('w'), siteWide: true }
+    await saveUserSources(db, MASTER_USER_ID, [wide])
+    expect(JSON.parse(settings.get('admin_sitewide_sources') ?? '[]')).toHaveLength(1)
+    await saveUserSources(db, MASTER_USER_ID, [], { deletedIds: ['w'] })
+    expect(JSON.parse(settings.get('admin_sitewide_sources') ?? '[]')).toEqual([])
+    // 旧名单回存也带不回来
+    await saveUserSources(db, MASTER_USER_ID, [wide])
+    expect(JSON.parse(settings.get('admin_sitewide_sources') ?? '[]')).toEqual([])
+  })
+
+  it('读出时兜底过滤：历史数据里残留的已删条目不下发', async () => {
+    const { db, rows } = fakeUserSourcesDb()
+    rows.set(9, {
+      sources: JSON.stringify([entry('a'), entry('b')]),
+      deleted_ids: JSON.stringify(['b']),
+    })
+    const meta = await getUserSourcesMeta(db, 9)
+    expect(meta.sources.map(s => s.id)).toEqual(['a'])
+    expect(meta.deletedIds).toEqual(['b'])
   })
 })

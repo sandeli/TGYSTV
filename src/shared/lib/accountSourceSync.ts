@@ -6,7 +6,9 @@ import { useSubscriptionStore } from '@/shared/store/subscriptionStore'
 import { fetchUserSources, saveMasterSubscriptions, saveUserSources } from '@/shared/lib/authApi'
 import {
   collectAccountSources,
+  computeReportedDeletions,
   dedupeAccountSources,
+  excludeDeletedSources,
   stripSiteWideFlags,
   findMirrorDroppedSources,
   fromAccountSourcePayload,
@@ -35,6 +37,27 @@ export function startAccountSourceSync(userId: number): () => void {
   let serverKnown: VideoSource[] = []
   /** 本次会话里在本地列表中出现过的源 id：出现过又消失 = 被删，不再从服务端副本里带回 */
   const seenIds = new Set<string>(useApiStore.getState().videoAPIs.map(s => s.id))
+  /** 服务端已删名单（任一设备删除后由服务端下发）：名单内的源不许再同步复活 */
+  let serverDeletedIds = new Set<string>()
+  /** 本次会话已发生、还没成功上报服务端的删除（保存失败时保留，下次保存带上） */
+  const pendingDeletedIds = new Set<string>()
+  /** 本次会话由用户新加/导入的源 id：只有这类「明确重新添加」能离开已删名单 */
+  const sessionRevivedIds = new Set<string>()
+
+  /** 把本地还残留的已删名单条目直接摘除（连未登记的本地副本一并清掉） */
+  const stripDeletedLocally = () => {
+    const ids = [...serverDeletedIds].filter(id => !sessionRevivedIds.has(id))
+    if (ids.length === 0) return
+    if (!useApiStore.getState().videoAPIs.some(s => ids.includes(s.id))) return
+    applying = true
+    useApiStore.getState().removeSourcesByIds(ids)
+    applying = false
+  }
+
+  /** 与 pushNow 同口径的变更哈希（源列表 + 本次删除/重加），保证启动后无变化时不重复保存 */
+  const hashFor = (list: VideoSource[], reported: string[] = [], revived: string[] = []) =>
+    serializeAccountSources(list) +
+    `|del:${[...reported].sort().join(',')}|rev:${[...revived].sort().join(',')}`
 
   // 只有站长（userId=0）的源可以带「全站生效」标记；普通用户收集时一律剥掉，
   // 保证本地展示、上行载荷与服务端落库口径一致（源只在自己账户中启用）
@@ -49,7 +72,8 @@ export function startAccountSourceSync(userId: number): () => void {
     if (disposed) return
     const token = useAuthStore.getState().token
     if (!token) return
-    const local = collect()
+    // 已删名单内的本地残留先剔除（本次会话明确重新添加的除外），不许它们随整体保存复活
+    const local = excludeDeletedSources(collect(), [...serverDeletedIds], [...sessionRevivedIds])
     const localIds = new Set(local.map(s => s.id))
     // 已发布（全站生效）的源在托管镜像没加载到本机时不出现在本地列表里，
     // 回存时把这类「服务端有、本机没见过」的条目原样带回，避免一次本地编辑把它们误删下架
@@ -57,13 +81,31 @@ export function startAccountSourceSync(userId: number): () => void {
       s => s.siteWide === true && !localIds.has(s.id) && !seenIds.has(s.id),
     )
     const list = dedupeAccountSources([...local, ...carried])
-    const hash = serializeAccountSources(list)
+    const listIds = new Set(list.map(s => s.id))
+    // 本次上报的删除：会话内已删待上报 + 服务端已知但本地已没有的；已重新加回本地的不算删除
+    const reportedDeleted = [
+      ...new Set([
+        ...[...pendingDeletedIds].filter(id => !listIds.has(id)),
+        ...computeReportedDeletions(
+          serverKnown.map(s => s.id),
+          listIds,
+        ).filter(id => !sessionRevivedIds.has(id)),
+      ]),
+    ]
+    const revived = [...sessionRevivedIds].filter(id => listIds.has(id))
+    const hash = hashFor(list, reportedDeleted, revived)
     if (hash === lastHash) return
     // 先乐观更新服务端副本：托管镜像随后摘除/恢复条目时，对账以这份最新意图为准
     serverKnown = list
     try {
-      const saved = await saveUserSources(token, list.map(toAccountSourcePayload))
+      const saved = await saveUserSources(token, list.map(toAccountSourcePayload), {
+        deletedIds: reportedDeleted,
+        revivedIds: revived,
+      })
       serverKnown = saved.sources.map(fromAccountSourcePayload)
+      if (saved.deletedIds) serverDeletedIds = new Set(saved.deletedIds)
+      pendingDeletedIds.clear()
+      stripDeletedLocally()
       lastHash = hash
       failureNotified = false
       // 全站分发可能变化：刷新公开配置，托管镜像（本站长设备与其他用户）随后跟上
@@ -120,7 +162,12 @@ export function startAccountSourceSync(userId: number): () => void {
       const remote = await fetchUserSources(token)
       if (disposed) return
       serverKnown = remote.sources.map(fromAccountSourcePayload)
-      const localList = collect()
+      // 服务端已删名单先行：本地残留的名单条目直接摘除，合并时也不许它们再混进来
+      if (remote.deletedIds && remote.deletedIds.length > 0) {
+        serverDeletedIds = new Set(remote.deletedIds)
+        stripDeletedLocally()
+      }
+      const localList = excludeDeletedSources(collect(), [...serverDeletedIds])
       // 并集（同 id 以服务端为准）：把这台设备上还没上过账户的老手动源迁上去；
       // 再按（名称+地址）去重——同一个源在不同设备上添加的 id 不同，不去重就会变成两条重复源
       const remoteIds = new Set(serverKnown.map(s => s.id))
@@ -154,11 +201,14 @@ export function startAccountSourceSync(userId: number): () => void {
         }
       }
       for (const s of useApiStore.getState().videoAPIs) seenIds.add(s.id)
-      lastHash = serializeAccountSources(collect())
+      stripDeletedLocally()
+      lastHash = hashFor(collect())
       if (serializeAccountSources(serverKnown) !== serializeAccountSources(merged)) {
         const saved = await saveUserSources(token, merged.map(toAccountSourcePayload))
         serverKnown = saved.sources.map(fromAccountSourcePayload)
-        lastHash = serializeAccountSources(collect())
+        if (saved.deletedIds) serverDeletedIds = new Set(saved.deletedIds)
+        stripDeletedLocally()
+        lastHash = hashFor(collect())
         if (!disposed) void useAuthStore.getState().probeConfig()
       }
     } catch {
@@ -169,7 +219,14 @@ export function startAccountSourceSync(userId: number): () => void {
 
   const unsubscribe = useApiStore.subscribe((state, prevState) => {
     if (disposed) return
-    for (const s of state.videoAPIs) seenIds.add(s.id)
+    for (const s of state.videoAPIs) {
+      if (!seenIds.has(s.id)) {
+        // 同步引擎自己应用的变更（applying）不算用户新加；其余首次出现的 id 记为
+        // 「本次会话明确添加」——只有它们能把同 id 的旧源带出已删名单重新保存
+        if (!applying) sessionRevivedIds.add(s.id)
+        seenIds.add(s.id)
+      }
+    }
     if (applying) return
     if (state.videoAPIs === prevState.videoAPIs) return
     if (state.managedSourceIds !== prevState.managedSourceIds) {
@@ -184,8 +241,16 @@ export function startAccountSourceSync(userId: number): () => void {
       }
     } else {
       // 用户自己的增删改（含删除源）：以本地为准，服务端副本跟随，
-      // 删除随之生效、随后回存时同步删掉服务端那份，不会被对账恢复回来
-      serverKnown = collect()
+      // 删除随之生效、随后回存时同步删掉服务端那份，不会被对账恢复回来；
+      // 被删的 id 同时记入待上报删除，回存时进服务端已删名单，防旧设备传回复活
+      const nextLocal = collect()
+      for (const id of computeReportedDeletions(
+        serverKnown.map(s => s.id),
+        new Set(nextLocal.map(s => s.id)),
+      )) {
+        pendingDeletedIds.add(id)
+      }
+      serverKnown = nextLocal
     }
     schedulePush()
   })

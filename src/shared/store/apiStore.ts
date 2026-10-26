@@ -100,6 +100,8 @@ interface ApiActions {
   reorderVideoAPIs: (orderedIds: string[]) => void
   // 把服务端账户源镜像进本地列表（登录后同步用，逻辑见 lib/accountSources）
   applyAccountSources: (sources: VideoSource[]) => void
+  // 按 id 直接摘除一批源（账号同步执行服务端已删名单时用：连未登记的本地残留副本一并清掉）
+  removeSourcesByIds: (ids: string[]) => void
   // 账号源同步开始前调用：归属用户变了就先清掉上一账号同步下来的源并改记归属
   beginAccountSyncForUser: (userId: number) => void
 }
@@ -420,6 +422,14 @@ export const useApiStore = create<ApiStore>()(
             )
             state.videoAPIs = mirrored.videoAPIs
             state.accountSourceIds = mirrored.accountSourceIds
+          })
+        },
+
+        removeSourcesByIds: (ids: string[]) => {
+          if (ids.length === 0) return
+          set(state => {
+            const dead = new Set(ids)
+            state.videoAPIs = state.videoAPIs.filter(s => !dead.has(s.id))
           })
         },
 

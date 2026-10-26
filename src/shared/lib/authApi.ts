@@ -517,11 +517,14 @@ export interface SubscriptionRefreshMeta {
 /** 读取当前登录用户的账号源（随账户走，按账号隔离）；站长额外带回服务端订阅源与刷新状态 */
 export function fetchUserSources(token: string): Promise<{
   sources: AccountSourcePayload[]
+  /** 已删名单：名单内的源已被删除，本地若还有残留副本要清掉、不许再传回复活 */
+  deletedIds?: string[]
   subscriptionSources?: AccountSourcePayload[]
   subscriptionMeta?: SubscriptionRefreshMeta[]
 }> {
   return request<{
     sources: AccountSourcePayload[]
+    deletedIds?: string[]
     subscriptionSources?: AccountSourcePayload[]
     subscriptionMeta?: SubscriptionRefreshMeta[]
   }>('/api/user/sources', { method: 'GET' }, token)
@@ -539,14 +542,30 @@ export function saveMasterSubscriptions(
   )
 }
 
-/** 整体保存当前用户的账号源；站长开启全站生效的源由服务端同步派生到全站分发列表 */
+/**
+ * 整体保存当前用户的账号源；站长开启全站生效的源由服务端同步派生到全站分发列表。
+ * opts.deletedIds 上报本次删除、opts.revivedIds 上报本次明确重新添加的源，
+ * 服务端据此维护已删名单（名单内的源之后再被旧设备传回也会被拦下）。
+ */
 export function saveUserSources(
   token: string,
   sources: AccountSourcePayload[],
-): Promise<{ ok: true; sources: AccountSourcePayload[] }> {
-  return request<{ ok: true; sources: AccountSourcePayload[] }>(
+  opts?: { deletedIds?: string[]; revivedIds?: string[] },
+): Promise<{ ok: true; sources: AccountSourcePayload[]; deletedIds?: string[] }> {
+  return request<{ ok: true; sources: AccountSourcePayload[]; deletedIds?: string[] }>(
     '/api/user/sources',
-    { method: 'PUT', body: JSON.stringify({ sources }) },
+    {
+      method: 'PUT',
+      body: JSON.stringify({
+        sources,
+        ...(opts?.deletedIds && opts.deletedIds.length > 0
+          ? { deletedIds: opts.deletedIds }
+          : {}),
+        ...(opts?.revivedIds && opts.revivedIds.length > 0
+          ? { revivedIds: opts.revivedIds }
+          : {}),
+      }),
+    },
     token,
   )
 }

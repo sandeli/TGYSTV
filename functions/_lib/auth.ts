@@ -174,6 +174,8 @@ export function ensureSchema(db: D1Database): Promise<void> {
         ['users', 'expires_at', 'INTEGER'],
         // 电报上线通知开关（1 = 该用户登录时给管理员发 TG 通知）
         ['users', 'tg_watch', 'INTEGER NOT NULL DEFAULT 0'],
+        // 账号源已删名单（JSON 数组）：防旧设备带着已删源的旧列表整体回存时把源复活
+        ['user_sources', 'deleted_ids', "TEXT NOT NULL DEFAULT '[]'"],
       ]
       for (const [table, column, type] of columnAdditions) {
         try {
@@ -684,20 +686,95 @@ export function extractSiteWideSources(
   return list.filter(s => s.siteWide)
 }
 
+// ---------- 账号源「已删名单」（防已删源被旧设备传回复活） ----------
+
+export const DELETED_SOURCE_IDS_LIMIT = 500
+
+/**
+ * 清洗已删源 id 列表（不可信输入）：只保留非空字符串、去重并限量。
+ * 订阅源 id（sub: 前缀）不属于账号源、永不入名单。
+ */
+export function parseDeletedSourceIds(input: unknown): string[] {
+  if (!Array.isArray(input)) return []
+  const out: string[] = []
+  const seen = new Set<string>()
+  for (const raw of input) {
+    if (out.length >= DELETED_SOURCE_IDS_LIMIT) break
+    if (typeof raw !== 'string') continue
+    const id = raw.trim().slice(0, 128)
+    if (!id || id.startsWith('sub:') || seen.has(id)) continue
+    seen.add(id)
+    out.push(id)
+  }
+  return out
+}
+
+/**
+ * 合并已删名单：旧名单 ∪ 本次上报的删除 − 本次明确重新添加的 id。
+ * 名单对后到的整体保存有否决权：旧设备带着已删源的旧名单整体回存时，
+ * 只要该源没被列入「本次重新添加」，就会被名单拦下、不会复活。
+ */
+export function resolveDeletedSourceIds(
+  prev: string[],
+  reported: unknown,
+  revived: unknown,
+): string[] {
+  const revivedSet = new Set(parseDeletedSourceIds(revived))
+  const merged = [...prev, ...parseDeletedSourceIds(reported)].filter(id => !revivedSet.has(id))
+  return [...new Set(merged)].slice(0, DELETED_SOURCE_IDS_LIMIT)
+}
+
+/** 读取账号源 + 已删名单；名单兜底过滤：历史数据里残留的已删条目读出时一并滤掉 */
+async function readUserSources(
+  db: D1Database,
+  userId: number,
+): Promise<{ sources: AccountSourceEntry[]; deletedIds: string[] }> {
+  let row: { sources: string; deleted_ids?: string | null } | null = null
+  try {
+    row = await db
+      .prepare('SELECT sources, deleted_ids FROM user_sources WHERE user_id = ?')
+      .bind(userId)
+      .first<{ sources: string; deleted_ids?: string | null }>()
+  } catch {
+    // deleted_ids 列尚未补上（极旧数据库）：退回只读源列表
+    row = await db
+      .prepare('SELECT sources FROM user_sources WHERE user_id = ?')
+      .bind(userId)
+      .first<{ sources: string }>()
+  }
+  if (!row?.sources) return { sources: [], deletedIds: [] }
+  let deletedIds: string[] = []
+  try {
+    deletedIds = parseDeletedSourceIds(JSON.parse(row.deleted_ids ?? '[]'))
+  } catch {
+    deletedIds = []
+  }
+  let sources: AccountSourceEntry[] = []
+  try {
+    sources = parseAccountSources(JSON.parse(row.sources))
+  } catch {
+    sources = []
+  }
+  if (deletedIds.length > 0) {
+    const dead = new Set(deletedIds)
+    sources = sources.filter(s => !dead.has(s.id))
+  }
+  return { sources, deletedIds }
+}
+
 export async function getUserSources(
   db: D1Database,
   userId: number,
 ): Promise<AccountSourceEntry[]> {
-  const row = await db
-    .prepare('SELECT sources FROM user_sources WHERE user_id = ?')
-    .bind(userId)
-    .first<{ sources: string }>()
-  if (!row?.sources) return []
-  try {
-    return parseAccountSources(JSON.parse(row.sources))
-  } catch {
-    return []
-  }
+  return (await readUserSources(db, userId)).sources
+}
+
+/** 与 getUserSources 相同，但同时带回已删名单（账号源接口下发给客户端同步引擎用） */
+export async function getUserSourcesMeta(
+  db: D1Database,
+  userId: number,
+): Promise<{ sources: AccountSourceEntry[]; deletedIds: string[] }> {
+  return readUserSources(db, userId)
 }
 
 /** 账号源按用户归一：只有站长的源可以带「全站生效」标记，普通用户的标记一律剥掉（防越权分发） */
@@ -712,23 +789,32 @@ export function normalizeAccountSourcesForUser(
 /**
  * 保存账号源（清洗后整体覆盖）。站长保存时同步派生全站分发列表
  * （settings 键 admin_sitewide_sources，公开配置与 TVBox 接口都读它）。
+ * opts.deletedIds 是客户端本次上报的删除，opts.revivedIds 是本次明确重新添加的源：
+ * 合并后的已删名单会否决名单内的源进入保存结果，旧设备的过期名单无法把已删源带回复活；
+ * 只有被明确重新添加（revivedIds）的源才能离开名单、重新保存。
  */
 export async function saveUserSources(
   db: D1Database,
   userId: number,
   sources: unknown,
-): Promise<AccountSourceEntry[]> {
-  const cleaned = normalizeAccountSourcesForUser(parseAccountSources(sources), userId)
+  opts: { deletedIds?: unknown; revivedIds?: unknown } = {},
+): Promise<{ sources: AccountSourceEntry[]; deletedIds: string[] }> {
+  const prev = await readUserSources(db, userId)
+  const deletedIds = resolveDeletedSourceIds(prev.deletedIds, opts.deletedIds, opts.revivedIds)
+  const dead = new Set(deletedIds)
+  const cleaned = normalizeAccountSourcesForUser(parseAccountSources(sources), userId).filter(
+    s => !dead.has(s.id),
+  )
   await db
     .prepare(
-      'INSERT INTO user_sources (user_id, sources, updated_at) VALUES (?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET sources = excluded.sources, updated_at = excluded.updated_at',
+      'INSERT INTO user_sources (user_id, sources, deleted_ids, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET sources = excluded.sources, deleted_ids = excluded.deleted_ids, updated_at = excluded.updated_at',
     )
-    .bind(userId, JSON.stringify(cleaned), Math.floor(Date.now() / 1000))
+    .bind(userId, JSON.stringify(cleaned), JSON.stringify(deletedIds), Math.floor(Date.now() / 1000))
     .run()
   if (userId === MASTER_USER_ID) {
     await setSetting(db, 'admin_sitewide_sources', JSON.stringify(extractSiteWideSources(cleaned)))
   }
-  return cleaned
+  return { sources: cleaned, deletedIds }
 }
 
 export async function getSetting(db: D1Database, key: string): Promise<string | null> {

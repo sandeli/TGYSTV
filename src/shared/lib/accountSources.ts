@@ -86,6 +86,33 @@ export function serializeAccountSources(list: VideoSource[]): string {
 }
 
 /**
+ * 从一批源里剔除已删名单命中的条目（防复活口径）：
+ * 名单由服务端维护（任一设备删除都会进名单），名单内的源哪怕还残留在某台
+ * 旧设备的本地列表里，也不许再参与同步上传；本次会话明确重新添加的源除外。
+ */
+export function excludeDeletedSources(
+  list: VideoSource[],
+  deletedIds: readonly string[],
+  revivedIds: readonly string[] = [],
+): VideoSource[] {
+  if (deletedIds.length === 0) return list
+  const dead = new Set(deletedIds)
+  const revived = new Set(revivedIds)
+  return list.filter(s => !dead.has(s.id) || revived.has(s.id))
+}
+
+/**
+ * 本次要上报服务端的删除：服务端已知的源 id 里、本地集合已不存在的那些。
+ * 上报后它们进入服务端的已删名单，之后任何设备再传回都会被拦下。
+ */
+export function computeReportedDeletions(
+  serverKnownIds: readonly string[],
+  localIds: ReadonlySet<string>,
+): string[] {
+  return serverKnownIds.filter(id => !localIds.has(id))
+}
+
+/**
  * 把服务端下发的订阅源按订阅 id 分组（id 约定 sub:<订阅id>:<序号>）。
  * 服务端自动更新维护的是站长订阅的最新源快照，站长端登录时按组应用到本地，
  * 每组交给 apiStore.replaceSubscriptionSources 整体换新；非订阅形态的条目跳过。

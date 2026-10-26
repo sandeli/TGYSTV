@@ -291,3 +291,21 @@ describe('apiStore 用户导入视频源', () => {
     expect(useApiStore.getState().videoAPIs).toHaveLength(1)
   })
 })
+
+describe('apiStore removeSourcesByIds 按 id 摘除', () => {
+  it('摘除指定 id 的源，其余保留；空名单不动', () => {
+    const mk = (id: string) => ({
+      id,
+      name: id,
+      url: `https://${id}.example/api`,
+      detailUrl: `https://${id}.example/api`,
+      isEnabled: true,
+      updatedAt: new Date(),
+    })
+    useApiStore.setState({ videoAPIs: [mk('a'), mk('b'), mk('c')] })
+    useApiStore.getState().removeSourcesByIds(['b'])
+    expect(useApiStore.getState().videoAPIs.map(s => s.id)).toEqual(['a', 'c'])
+    useApiStore.getState().removeSourcesByIds([])
+    expect(useApiStore.getState().videoAPIs).toHaveLength(2)
+  })
+})

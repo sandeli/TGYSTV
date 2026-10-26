@@ -3,7 +3,9 @@ import type { VideoSource } from '@tgys/cms-core'
 import {
   applyAccountMirror,
   collectAccountSources,
+  computeReportedDeletions,
   dedupeAccountSources,
+  excludeDeletedSources,
   findMirrorDroppedSources,
   fromAccountSourcePayload,
   groupServerSubscriptionSources,
@@ -194,5 +196,34 @@ describe('groupServerSubscriptionSources 服务端订阅源分组', () => {
     expect([...grouped.keys()].sort()).toEqual(['aaa', 'bbb'])
     expect(grouped.get('aaa')?.map(s => s.id)).toEqual(['sub:aaa:0', 'sub:aaa:1'])
     expect(grouped.get('bbb')).toHaveLength(1)
+  })
+})
+
+describe('excludeDeletedSources 已删名单过滤', () => {
+  it('剔除名单内的源，其余原样保留', () => {
+    const list = [src({ id: 'keep1' }), src({ id: 'dead1' }), src({ id: 'keep2' })]
+    const out = excludeDeletedSources(list, ['dead1'])
+    expect(out.map(s => s.id)).toEqual(['keep1', 'keep2'])
+  })
+
+  it('本次明确重新添加的源不受名单拦截', () => {
+    const list = [src({ id: 'dead1' }), src({ id: 'dead2' })]
+    const out = excludeDeletedSources(list, ['dead1', 'dead2'], ['dead2'])
+    expect(out.map(s => s.id)).toEqual(['dead2'])
+  })
+
+  it('名单为空时原样返回', () => {
+    const list = [src({ id: 'a' })]
+    expect(excludeDeletedSources(list, [])).toBe(list)
+  })
+})
+
+describe('computeReportedDeletions 上报删除计算', () => {
+  it('服务端已知、本地已不存在的 id 即为删除', () => {
+    expect(computeReportedDeletions(['a', 'b', 'c'], new Set(['a', 'c']))).toEqual(['b'])
+  })
+
+  it('本地都在时无删除', () => {
+    expect(computeReportedDeletions(['a'], new Set(['a', 'b']))).toEqual([])
   })
 })
