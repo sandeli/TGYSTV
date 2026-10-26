@@ -33,6 +33,8 @@ interface SourceSpeedState {
   isWorking: boolean
   /** 是否仍在跨源匹配候选 */
   discovering: boolean
+  /** 再次测速：把当前全部候选源重新实测一遍（不复用解析页缓存）；测速进行中调用无效 */
+  retest: () => void
 }
 
 const MAX_CONCURRENT = 3
@@ -72,9 +74,13 @@ export function useSourceSpeedOptions({
   const queueRef = useRef<PlayerSourceOption[]>([])
   const activeRef = useRef(0)
   const discoverRunRef = useRef(0)
+  /** 测速轮次：再次测速时递增，上一轮还没回来的探测结果作废、不许覆盖新一轮 */
+  const probeRunRef = useRef(0)
+  const discoveringRef = useRef(false)
 
   // ① 重置：标题或路由类型变化时清空上一部影片的候选与测速（必须最先声明）
   useEffect(() => {
+    probeRunRef.current += 1
     probeRef.current = new Map()
     qualityRef.current = new Map()
     doneRef.current = new Set()
@@ -86,6 +92,11 @@ export function useSourceSpeedOptions({
     setDiscovered([])
     setDiscovering(false)
   }, [isTmdbRoute, discoverTitle])
+
+  // 匹配状态镜像（供再次测速的同步守卫读取）
+  useEffect(() => {
+    discoveringRef.current = discovering
+  }, [discovering])
 
   // ② 直连路由：跨源搜索同名资源（标题变化时重做）
   useEffect(() => {
@@ -154,10 +165,15 @@ export function useSourceSpeedOptions({
     }
     return list
   }, [isTmdbRoute, tmdbOptions, currentOption, discovered])
+  const baseOptionsRef = useRef<PlayerSourceOption[]>([])
+  baseOptionsRef.current = baseOptions
 
   // 真实吞吐探测：取详情第一集地址，实下约 256KB 分片量吞吐（结果按源 code 记录，幂等）
   const runProbe = useCallback(async (option: PlayerSourceOption) => {
+    const round = probeRunRef.current
     const finish = (result: PlaybackProbeResult | null) => {
+      // 已进入新一轮测速：上一轮迟到的结果作废，不能覆盖新一轮状态
+      if (round !== probeRunRef.current) return
       doneRef.current.add(option.sourceCode)
       setProbedCodes(new Set(doneRef.current))
       if (result !== null) {
@@ -228,6 +244,25 @@ export function useSourceSpeedOptions({
     pumpQueue()
   }, [baseOptions, pumpQueue, seedFromResolveCache])
 
+  // 再次测速：清空本轮结果，把当前全部候选重新排队实测（不走解析页缓存，要的是最新网络状况）；
+  // 还在匹配候选或上一轮没测完时调用无效，避免两轮探测互相打架
+  const retest = useCallback(() => {
+    const all = baseOptionsRef.current
+    if (all.length === 0) return
+    if (discoveringRef.current) return
+    if (doneRef.current.size < all.length) return
+    probeRunRef.current += 1
+    probeRef.current = new Map()
+    qualityRef.current = new Map()
+    doneRef.current = new Set()
+    enqueuedRef.current = new Set(all.map(o => o.sourceCode))
+    queueRef.current = [...all]
+    setProbes(new Map())
+    setQualities(new Map())
+    setProbedCodes(new Set())
+    pumpQueue()
+  }, [pumpQueue])
+
   const options = useMemo(() => {
     const sorted = [...baseOptions]
     sorted.sort((a, b) =>
@@ -238,5 +273,5 @@ export function useSourceSpeedOptions({
 
   const isWorking = discovering || probedCodes.size < baseOptions.length
 
-  return { options, probes, qualities, probedCodes, isWorking, discovering }
+  return { options, probes, qualities, probedCodes, isWorking, discovering, retest }
 }

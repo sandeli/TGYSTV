@@ -1995,6 +1995,7 @@ export default function UnifiedPlayer() {
                 probedCodes={sourceSpeed.probedCodes}
                 selectedSourceCode={resolvedSourceCode}
                 onSourceChange={handleAnySourceChange}
+                onRetest={sourceSpeed.retest}
                 isWorking={sourceSpeed.isWorking}
                 matching={sourceSpeed.discovering}
               />
@@ -2117,6 +2118,7 @@ export default function UnifiedPlayer() {
               probedCodes={sourceSpeed.probedCodes}
               selectedSourceCode={resolvedSourceCode}
               onSourceChange={handleAnySourceChange}
+              onRetest={sourceSpeed.retest}
               isWorking={sourceSpeed.isWorking}
               className="shrink-0"
             />

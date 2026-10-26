@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { ChevronDown, Clapperboard, RadioTower } from 'lucide-react'
+import { ChevronDown, Clapperboard, RadioTower, RefreshCw } from 'lucide-react'
 import { Button } from '@/shared/components/ui/button'
 import {
   Collapsible,
@@ -18,6 +18,8 @@ interface PlayerSourceSpeedStripProps {
   probedCodes: Set<string>
   selectedSourceCode: string
   onSourceChange: (sourceCode: string) => void
+  /** 再次测速（测速完毕后在面板底部显示按钮）；不传则不显示 */
+  onRetest?: () => void
   isWorking: boolean
   /** 正在跨源匹配候选（尚无结果时显示同款占位条，避免换源条突然蹦出） */
   matching?: boolean
@@ -54,6 +56,7 @@ export function PlayerSourceSpeedStrip({
   probedCodes,
   selectedSourceCode,
   onSourceChange,
+  onRetest,
   isWorking,
   matching = false,
   className,
@@ -154,6 +157,20 @@ export function PlayerSourceSpeedStrip({
             })}
           </div>
         </ScrollArea>
+        {onRetest && !isWorking && (
+          <div className="flex justify-end pt-3">
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              className="gap-1.5 rounded-full"
+              onClick={onRetest}
+            >
+              <RefreshCw className="size-3.5" />
+              再次测速
+            </Button>
+          </div>
+        )}
       </CollapsibleContent>
     </Collapsible>
   )

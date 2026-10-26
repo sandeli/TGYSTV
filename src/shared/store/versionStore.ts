@@ -57,6 +57,16 @@ const formatDate = (dateStr: string) => {
 // 版本更新历史
 const VERSION_UPDATES: VersionUpdate[] = [
   {
+    version: '2.37.0',
+    title: '换源栏可再次测速',
+    date: formatDate('2026-10-26'),
+    features: [
+      '播放页换源面板新增「再次测速」按钮：全部源测速完毕后，按钮出现在源列表下方，点一下就把所有候选源按当前网络状况重新实测一遍并重新排序（不复用之前的测速结果）；测速进行中按钮自动隐藏、不会重复触发。网络中途变好或变差时，不用退出播放页就能拿到最新的源速度。',
+    ],
+    fixes: [],
+    breaking: [],
+  },
+  {
     version: '2.36.1',
     title: '已删视频源防复活',
     date: formatDate('2026-10-26'),
