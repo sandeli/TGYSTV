@@ -57,6 +57,16 @@ const formatDate = (dateStr: string) => {
 // 版本更新历史
 const VERSION_UPDATES: VersionUpdate[] = [
   {
+    version: '2.38.0',
+    title: '人机验证改成本站数字验证码',
+    date: formatDate('2026-10-28'),
+    features: [
+      '站长登录与注册账号的人机验证由 Cloudflare Turnstile 换成本站自己的数字验证码：登录页直接显示一张 4 位数字图片，照着输入即可，看不清点图片就能换一张。原验证组件要连接 Cloudflare 的验证服务器，国内部分运营商（如中国移动宽带）长期连不通、验证框经常刷不出来；新验证码由本站自己出题校验，任何网络下都能正常显示。验证码 5 分钟内有效、输错或用过一次即作废需看新图，站长登录原有的失败锁定防爆破保持不变；会员登录本来就没有验证码，这次不受影响。',
+    ],
+    fixes: [],
+    breaking: [],
+  },
+  {
     version: '2.37.0',
     title: '换源栏可再次测速',
     date: formatDate('2026-10-26'),

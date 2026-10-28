@@ -10,6 +10,7 @@ import {
   registerAccount,
   type AuthPublicConfig,
   type AuthUser,
+  type CaptchaAnswer,
 } from '@/shared/lib/authApi'
 
 /**
@@ -44,17 +45,17 @@ type PersistedAuthState = Pick<AuthState, 'token' | 'user' | 'sessionToken' | 's
 
 interface AuthActions {
   probeConfig: () => Promise<AuthPublicConfig>
-  /** 账号登录（server 模式） */
-  loginWithAccount: (username: string, password: string, turnstileToken?: string) => Promise<AuthResult>
-  /** 注册（server 模式，注册成功即登录） */
+  /** 账号登录（server 模式；站长登录时需带数字验证码作答） */
+  loginWithAccount: (username: string, password: string, captcha?: CaptchaAnswer) => Promise<AuthResult>
+  /** 注册（server 模式，注册成功即登录；需带数字验证码作答） */
   register: (
     username: string,
     password: string,
-    turnstileToken?: string,
+    captcha?: CaptchaAnswer,
     inviteCode?: string,
   ) => Promise<AuthResult>
   /** 单密码登录：server 模式下即站长登录（admin），legacy 模式下是原访问密码 */
-  login: (password: string, turnstileToken?: string) => Promise<boolean>
+  login: (password: string, captcha?: CaptchaAnswer) => Promise<boolean>
   logout: () => Promise<void>
   setLoginWallRequested: (requested: boolean) => void
   validateSession: () => Promise<boolean>
@@ -110,9 +111,9 @@ export const useAuthStore = create<AuthStore>()(
         return probePromise
       },
 
-      loginWithAccount: async (username, password, turnstileToken) => {
+      loginWithAccount: async (username, password, captcha) => {
         try {
-          const { token, user } = await loginAccount(username, password, turnstileToken)
+          const { token, user } = await loginAccount(username, password, captcha)
           set({ token, user, isInitialized: true })
           return { ok: true }
         } catch (error) {
@@ -123,12 +124,12 @@ export const useAuthStore = create<AuthStore>()(
         }
       },
 
-      register: async (username, password, turnstileToken, inviteCode) => {
+      register: async (username, password, captcha, inviteCode) => {
         try {
           const { token, user } = await registerAccount(
             username,
             password,
-            turnstileToken,
+            captcha,
             inviteCode,
           )
           set({ token, user, isInitialized: true })
@@ -141,10 +142,10 @@ export const useAuthStore = create<AuthStore>()(
         }
       },
 
-      login: async (password: string, turnstileToken?: string) => {
+      login: async (password: string, captcha?: CaptchaAnswer) => {
         // server 模式：单密码即站长登录
         if (get().authMode === 'server') {
-          const result = await get().loginWithAccount('admin', password, turnstileToken)
+          const result = await get().loginWithAccount('admin', password, captcha)
           return result.ok
         }
 

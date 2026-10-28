@@ -21,8 +21,6 @@ export interface AuthEnv {
   TGYS_DB?: D1Database
   TGYS_ACCESS_PASSWORD?: string
   TGYS_REGISTRATION_OPEN?: string
-  TGYS_TURNSTILE_SECRET?: string
-  TGYS_TURNSTILE_SITE_KEY?: string
   TGYS_INITIAL_VIDEO_SOURCES?: string
 }
 
@@ -152,6 +150,14 @@ export function ensureSchema(db: D1Database): Promise<void> {
             max_uses INTEGER NOT NULL DEFAULT 1,
             used_count INTEGER NOT NULL DEFAULT 0,
             expires_at INTEGER,
+            created_at INTEGER NOT NULL
+          )`,
+        ),
+        db.prepare(
+          `CREATE TABLE IF NOT EXISTS captcha_challenges (
+            id TEXT PRIMARY KEY,
+            code_hash TEXT NOT NULL,
+            expires_at INTEGER NOT NULL,
             created_at INTEGER NOT NULL
           )`,
         ),
@@ -1218,21 +1224,111 @@ export async function notifyUserLoginTg(
   await sendTelegramMessage(botToken, chatId, lines.join('\n'))
 }
 
-// ---------- Turnstile（可选：配置了 Secret 才校验） ----------
+// ---------- 数字验证码（自托管，替代 Cloudflare Turnstile） ----------
+// 背景：Turnstile 组件要连 challenges.cloudflare.com，国内部分运营商线路长期不稳、
+// 验证框经常加载不出来。改为本站自己出题：服务端生成 4 位数字 SVG 图片，
+// 题目只存答案的 SHA-256（id 作盐），5 分钟过期、校验一次即作废（对错都消费），
+// 不依赖任何第三方服务，任何网络下都能显示。
 
-export async function verifyTurnstile(env: AuthEnv, token: string | undefined): Promise<boolean> {
-  const secret = env.TGYS_TURNSTILE_SECRET
-  if (!secret) return true
-  if (!token) return false
-  try {
-    const response = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({ secret, response: token }),
-    })
-    const data = (await response.json()) as { success?: boolean }
-    return data.success === true
-  } catch {
-    return false
+export const CAPTCHA_CODE_LENGTH = 4
+export const CAPTCHA_TTL_SECONDS = 300
+
+/** 生成 4 位数字验证码（密码学随机） */
+export function generateCaptchaCode(): string {
+  const buf = new Uint32Array(1)
+  crypto.getRandomValues(buf)
+  return String(buf[0] % 10_000).padStart(CAPTCHA_CODE_LENGTH, '0')
+}
+
+/** 确定性伪随机（同 seed 同输出）：仅用于验证码图片的抖动排版，便于测试 */
+function captchaRand(seed: number): () => number {
+  let a = seed >>> 0
+  return () => {
+    a |= 0
+    a = (a + 0x6d2b79f5) | 0
+    let t = Math.imul(a ^ (a >>> 15), 1 | a)
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
   }
+}
+
+const CAPTCHA_COLORS = ['#1d4ed8', '#0f766e', '#b45309', '#be185d', '#6d28d9', '#334155']
+
+/** 把验证码渲染成 SVG 图片：每位数字随机旋转/升降/配色，叠加干扰线与噪点 */
+export function buildCaptchaSvg(code: string, seed = 1): string {
+  const rand = captchaRand(seed)
+  const width = 120
+  const height = 44
+  const parts: string[] = [
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">`,
+    `<rect width="${width}" height="${height}" fill="#f1f5f9"/>`,
+  ]
+  for (let i = 0; i < 3; i++) {
+    const y1 = Math.floor(rand() * height)
+    const y2 = Math.floor(rand() * height)
+    const color = CAPTCHA_COLORS[Math.floor(rand() * CAPTCHA_COLORS.length)]
+    parts.push(
+      `<path d="M0 ${y1} C 40 ${Math.floor(rand() * height)}, 80 ${Math.floor(rand() * height)}, ${width} ${y2}" stroke="${color}" stroke-width="1" fill="none" opacity="0.45"/>`,
+    )
+  }
+  const digits = code.split('')
+  digits.forEach((digit, i) => {
+    const x = 20 + i * 26
+    const y = 31 + Math.floor(rand() * 8) - 4
+    const rotate = Math.floor(rand() * 36) - 18
+    const size = 24 + Math.floor(rand() * 6)
+    const color = CAPTCHA_COLORS[Math.floor(rand() * CAPTCHA_COLORS.length)]
+    parts.push(
+      `<text x="${x}" y="${y}" font-family="Arial, Helvetica, sans-serif" font-size="${size}" font-weight="bold" fill="${color}" transform="rotate(${rotate} ${x} ${y})">${digit}</text>`,
+    )
+  })
+  for (let i = 0; i < 14; i++) {
+    const cx = Math.floor(rand() * width)
+    const cy = Math.floor(rand() * height)
+    const color = CAPTCHA_COLORS[Math.floor(rand() * CAPTCHA_COLORS.length)]
+    parts.push(`<circle cx="${cx}" cy="${cy}" r="1" fill="${color}" opacity="0.5"/>`)
+  }
+  parts.push('</svg>')
+  return parts.join('')
+}
+
+/** 出一道新题：写入挑战表（顺手清理过期题），返回题面 id 与 SVG 图片 */
+export async function createCaptchaChallenge(
+  db: D1Database,
+): Promise<{ id: string; image: string; expiresAt: number }> {
+  const id = randomHex(16)
+  const code = generateCaptchaCode()
+  const now = nowSeconds()
+  const expiresAt = now + CAPTCHA_TTL_SECONDS
+  await db.prepare('DELETE FROM captcha_challenges WHERE expires_at < ?').bind(now).run()
+  await db
+    .prepare(
+      'INSERT INTO captcha_challenges (id, code_hash, expires_at, created_at) VALUES (?, ?, ?, ?)',
+    )
+    .bind(id, await sha256Hex(`${id}:${code}`), expiresAt, now)
+    .run()
+  const seed = Number.parseInt(randomHex(4), 16)
+  return { id, image: buildCaptchaSvg(code, seed), expiresAt }
+}
+
+/**
+ * 校验一道题：格式不对直接拒；题目存在时无论对错都先消费掉（防对同一题反复试），
+ * 再比对过期时间与答案哈希。
+ */
+export async function verifyCaptchaChallenge(
+  db: D1Database,
+  id: unknown,
+  code: unknown,
+): Promise<boolean> {
+  if (typeof id !== 'string' || !/^[0-9a-f]{32}$/.test(id)) return false
+  const normalized = typeof code === 'string' ? code.trim() : ''
+  if (!/^\d{4}$/.test(normalized)) return false
+  const row = await db
+    .prepare('SELECT code_hash AS codeHash, expires_at AS expiresAt FROM captcha_challenges WHERE id = ?')
+    .bind(id)
+    .first<{ codeHash: string; expiresAt: number }>()
+  if (!row) return false
+  await db.prepare('DELETE FROM captcha_challenges WHERE id = ?').bind(id).run()
+  if (row.expiresAt < nowSeconds()) return false
+  return (await sha256Hex(`${id}:${normalized}`)) === row.codeHash
 }

@@ -93,7 +93,6 @@ export interface AuthPublicConfig {
   registrationCloseAt?: number
   /** 注册人数已达上限：登录页显示「注册名额已满」（上限数值本身不下发） */
   registrationFull?: boolean
-  turnstileSiteKey: string
   announcement: AnnouncementConfig | null
   /** 首页滚动公告（管理员后台设置；空字符串表示未设置，前端回退环境变量） */
   announcementBar: string
@@ -172,7 +171,6 @@ export async function fetchAuthConfig(): Promise<AuthPublicConfig> {
           ? Math.floor(data.registrationCloseAt)
           : 0,
       registrationFull: data.registrationFull === true,
-      turnstileSiteKey: typeof data.turnstileSiteKey === 'string' ? data.turnstileSiteKey : '',
       announcement,
       announcementBar: typeof data.announcementBar === 'string' ? data.announcementBar : '',
       doubanProxy:
@@ -214,7 +212,6 @@ export async function fetchAuthConfig(): Promise<AuthPublicConfig> {
       registrationOpenAt: 0,
       registrationCloseAt: 0,
       registrationFull: false,
-      turnstileSiteKey: '',
       announcement: null,
       announcementBar: '',
       doubanProxy: DEFAULT_DOUBAN_PROXY,
@@ -228,26 +225,52 @@ interface SessionResponse {
   user: AuthUser
 }
 
+/** 数字验证码作答（题目 id + 用户照图输入的 4 位数字，随登录/注册一并提交校验） */
+export interface CaptchaAnswer {
+  id: string
+  code: string
+}
+
+/** 数字验证码题目（本站自托管出题，image 为 SVG 原文） */
+export interface CaptchaChallenge {
+  id: string
+  image: string
+}
+
+/** 拉取一道数字验证码题目（站长登录与注册用，替代原 Cloudflare Turnstile） */
+export function fetchCaptcha(): Promise<CaptchaChallenge> {
+  return request<CaptchaChallenge>('/api/auth/captcha', { method: 'GET' })
+}
+
 export function loginAccount(
   username: string,
   password: string,
-  turnstileToken?: string,
+  captcha?: CaptchaAnswer,
 ): Promise<SessionResponse> {
   return request<SessionResponse>('/api/auth/login', {
     method: 'POST',
-    body: JSON.stringify({ username, password, turnstileToken }),
+    body: JSON.stringify({
+      username,
+      password,
+      ...(captcha ? { captchaId: captcha.id, captchaCode: captcha.code } : {}),
+    }),
   })
 }
 
 export function registerAccount(
   username: string,
   password: string,
-  turnstileToken?: string,
+  captcha?: CaptchaAnswer,
   inviteCode?: string,
 ): Promise<SessionResponse> {
   return request<SessionResponse>('/api/auth/register', {
     method: 'POST',
-    body: JSON.stringify({ username, password, turnstileToken, inviteCode }),
+    body: JSON.stringify({
+      username,
+      password,
+      ...(captcha ? { captchaId: captcha.id, captchaCode: captcha.code } : {}),
+      inviteCode,
+    }),
   })
 }
 

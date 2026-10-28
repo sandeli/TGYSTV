@@ -14,6 +14,11 @@ import { Input } from '@/shared/components/ui/input'
 import { Button } from '@/shared/components/ui/button'
 import { Spinner } from '@/shared/components/ui/spinner'
 import { useAuthStore } from '@/shared/store/authStore'
+import {
+  fetchCaptcha,
+  type CaptchaAnswer,
+  type CaptchaChallenge,
+} from '@/shared/lib/authApi'
 import { TgysLogo } from '@/shared/components/icons'
 import { toast } from 'sonner'
 import { getPublicEnv } from '@/shared/config/runtimeEnv'
@@ -28,63 +33,73 @@ const easeOutQuad = [0.25, 0.46, 0.45, 0.94] as const
 type GateMode = 'server' | 'legacy' | 'open'
 type FormMode = 'account' | 'master' | 'register'
 
-declare global {
-  interface Window {
-    turnstile?: {
-      render: (el: HTMLElement, opts: Record<string, unknown>) => string
-      remove: (id: string) => void
-      reset: (id: string) => void
-    }
-  }
-}
+/**
+ * 数字验证码输入（本站自托管出题，替代 Cloudflare Turnstile）：
+ * 挂载即拉一道题，输入框 + 可点击刷新的验证码图片；题目或输入变化时把作答报给父级。
+ * 题目 5 分钟过期、校验一次即作废，父级在提交失败/切换表单时以 key 重挂本组件换新题。
+ */
+function CaptchaField({ onChange }: { onChange: (answer: CaptchaAnswer) => void }) {
+  const [challenge, setChallenge] = useState<CaptchaChallenge | null>(null)
+  const [code, setCode] = useState('')
+  const [loadFailed, setLoadFailed] = useState(false)
 
-/** Cloudflare Turnstile 人机验证小部件（仅在配置了 Site Key 时渲染） */
-function TurnstileWidget({
-  siteKey,
-  onToken,
-}: {
-  siteKey: string
-  onToken: (token: string) => void
-}) {
-  const ref = useRef<HTMLDivElement>(null)
+  const load = useCallback(async () => {
+    setLoadFailed(false)
+    try {
+      setChallenge(await fetchCaptcha())
+    } catch {
+      setChallenge(null)
+      setLoadFailed(true)
+    }
+  }, [])
 
   useEffect(() => {
-    if (!siteKey) return
-    let widgetId: string | undefined
-    const render = () => {
-      if (ref.current && window.turnstile) {
-        widgetId = window.turnstile.render(ref.current, {
-          sitekey: siteKey,
-          callback: onToken,
-          // 令牌约 5 分钟过期且只能用一次：过期/出错时清掉旧令牌并重置组件重新出题，
-          // 否则用户只能刷新页面才能再登录（表现为「有时人机验证失败」）
-          'expired-callback': () => {
-            onToken('')
-            if (widgetId && window.turnstile) window.turnstile.reset(widgetId)
-          },
-          'error-callback': () => {
-            onToken('')
-            if (widgetId && window.turnstile) window.turnstile.reset(widgetId)
-          },
-        })
-      }
-    }
-    if (window.turnstile) {
-      render()
-    } else {
-      const script = document.createElement('script')
-      script.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js'
-      script.async = true
-      script.onload = render
-      document.head.appendChild(script)
-    }
-    return () => {
-      if (widgetId && window.turnstile) window.turnstile.remove(widgetId)
-    }
-  }, [siteKey, onToken])
+    void load()
+  }, [load])
 
-  if (!siteKey) return null
-  return <div ref={ref} className="flex justify-center" />
+  useEffect(() => {
+    onChange({ id: challenge?.id ?? '', code })
+  }, [challenge, code, onChange])
+
+  const refresh = () => {
+    setCode('')
+    void load()
+  }
+
+  return (
+    <div className="flex items-center gap-2">
+      <Input
+        type="text"
+        inputMode="numeric"
+        autoComplete="off"
+        placeholder="请输入图片验证码"
+        aria-label="图片验证码"
+        value={code}
+        onChange={e => setCode(e.target.value.replace(/\D/g, '').slice(0, 4))}
+        className="h-11 min-w-0 flex-1 rounded-full"
+      />
+      <button
+        type="button"
+        onClick={refresh}
+        title="看不清？点击刷新验证码"
+        aria-label="刷新验证码"
+        className="border-border/60 h-11 w-[120px] shrink-0 overflow-hidden rounded-lg border bg-white"
+      >
+        {challenge ? (
+          <img
+            src={`data:image/svg+xml;charset=utf-8,${encodeURIComponent(challenge.image)}`}
+            alt="数字验证码"
+            className="h-full w-full object-cover"
+            draggable={false}
+          />
+        ) : (
+          <span className="text-muted-foreground flex h-full items-center justify-center px-1 text-xs">
+            {loadFailed ? '加载失败，点击重试' : '加载中…'}
+          </span>
+        )}
+      </button>
+    </div>
+  )
 }
 
 /** 注册定时开放时刻的登录页展示文案（北京时间）：同年省略年份，如「11月1日 20:00」 */
@@ -131,7 +146,6 @@ export default function AuthGuard({ children }: AuthGuardProps) {
         ? 'after'
         : 'in'
   const registrationFull = useAuthStore(state => state.authConfig?.registrationFull ?? false)
-  const turnstileSiteKey = useAuthStore(state => state.authConfig?.turnstileSiteKey ?? '')
   const siteClosed = useAuthStore(state => state.authConfig?.siteBehavior?.siteClosed ?? false)
   const siteClosedMessage = useAuthStore(
     state => state.authConfig?.siteBehavior?.siteClosedMessage ?? '',
@@ -151,13 +165,17 @@ export default function AuthGuard({ children }: AuthGuardProps) {
   const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
   const [inviteCode, setInviteCode] = useState('')
-  const [turnstileToken, setTurnstileToken] = useState('')
-  // 人机验证令牌只能用一次：每次提交（无论成败）后都换新组件重新出题，
-  // 否则第二次登录会拿着已作废的令牌被服务端拒绝
-  const [turnstileNonce, setTurnstileNonce] = useState(0)
-  const refreshTurnstile = useCallback(() => {
-    setTurnstileToken('')
-    setTurnstileNonce(n => n + 1)
+  const [captchaAnswer, setCaptchaAnswer] = useState<CaptchaAnswer>({ id: '', code: '' })
+  // 验证码题目校验一次即作废：每次提交（无论成败）后都换新组件重新出题，
+  // 否则第二次提交会拿着已作废的题目被服务端拒绝
+  const [captchaNonce, setCaptchaNonce] = useState(0)
+  const refreshCaptcha = useCallback(() => {
+    setCaptchaAnswer({ id: '', code: '' })
+    setCaptchaNonce(n => n + 1)
+  }, [])
+  // 稳定引用：CaptchaField 靠 onChange 身份不变避免重复上报
+  const handleCaptchaChange = useCallback((answer: CaptchaAnswer) => {
+    setCaptchaAnswer(answer)
   }, [])
   const [isLoading, setIsLoading] = useState(false)
   const [isAuthenticated, setIsAuthenticated] = useState<boolean | null>(null)
@@ -292,9 +310,9 @@ export default function AuthGuard({ children }: AuthGuardProps) {
   const visitorAccess =
     gateMode === 'server' && visitorMode && !siteClosed && !loginWallRequested
 
-  // 站长登录在所有模式下都需要人机验证（防爆破站长密码，与服务端 login 的校验口径一致；
-  // 未配置密钥时组件不渲染、服务端放行）。legacy 单密码模式无账号系统，不在此列。
-  const masterTurnstileRequired = gateMode === 'server'
+  // 站长登录在所有模式下都需要数字验证码（防爆破站长密码，与服务端 login 的校验口径一致；
+  // 本站自托管出题，不依赖第三方验证服务）。legacy 单密码模式无账号系统，不在此列。
+  const masterCaptchaRequired = gateMode === 'server'
 
   if (
     gateMode === null ||
@@ -317,22 +335,22 @@ export default function AuthGuard({ children }: AuthGuardProps) {
   }
 
   const handleMasterLogin = async () => {
-    if (masterTurnstileRequired && turnstileSiteKey && !turnstileToken) {
-      toast.error('请先完成人机验证')
+    if (masterCaptchaRequired && captchaAnswer.code.length !== 4) {
+      toast.error('请输入 4 位数字验证码')
       return
     }
     setIsLoading(true)
     await new Promise(resolve => setTimeout(resolve, 300))
     const success = await login(
       password,
-      masterTurnstileRequired ? turnstileToken || undefined : undefined,
+      masterCaptchaRequired ? captchaAnswer : undefined,
     )
     if (success) {
       handleSuccess()
     } else {
       toast.error(gateMode === 'server' ? '站长密码不正确' : '验证失败')
       setIsLoading(false)
-      refreshTurnstile()
+      refreshCaptcha()
     }
   }
 
@@ -341,22 +359,14 @@ export default function AuthGuard({ children }: AuthGuardProps) {
       toast.error('请输入用户名和密码')
       return
     }
-    if (siteClosed && turnstileSiteKey && !turnstileToken) {
-      toast.error('请先完成人机验证')
-      return
-    }
+    // 会员登录不设验证码（服务端从不校验会员验证码；关站时服务端直接拒绝会员登录）
     setIsLoading(true)
-    const result = await loginWithAccount(
-      username.trim(),
-      password,
-      siteClosed ? turnstileToken || undefined : undefined,
-    )
+    const result = await loginWithAccount(username.trim(), password)
     if (result.ok) {
       handleSuccess()
     } else {
       toast.error(result.error ?? '登录失败')
       setIsLoading(false)
-      refreshTurnstile()
     }
   }
 
@@ -373,15 +383,15 @@ export default function AuthGuard({ children }: AuthGuardProps) {
       toast.error('请输入邀请码')
       return
     }
-    if (turnstileSiteKey && !turnstileToken) {
-      toast.error('请先完成人机验证')
+    if (captchaAnswer.code.length !== 4) {
+      toast.error('请输入 4 位数字验证码')
       return
     }
     setIsLoading(true)
     const result = await register(
       username.trim(),
       password,
-      turnstileToken || undefined,
+      captchaAnswer,
       registrationMode === 'invite' ? inviteCode.trim() : undefined,
     )
     if (result.ok) {
@@ -390,7 +400,7 @@ export default function AuthGuard({ children }: AuthGuardProps) {
     } else {
       toast.error(result.error ?? '注册失败')
       setIsLoading(false)
-      refreshTurnstile()
+      refreshCaptcha()
     }
   }
 
@@ -404,7 +414,7 @@ export default function AuthGuard({ children }: AuthGuardProps) {
   const switchForm = (mode: FormMode) => {
     setFormMode(mode)
     setConfirmPassword('')
-    refreshTurnstile()
+    refreshCaptcha()
   }
 
   // 访客模式下登录墙只有站长表单：没有账号登录、没有注册
@@ -532,8 +542,8 @@ export default function AuthGuard({ children }: AuthGuardProps) {
             >
               {gateMode === 'legacy' || formMode === 'master' ? (
                 <>
-                  {masterTurnstileRequired && (
-                    <TurnstileWidget key={turnstileNonce} siteKey={turnstileSiteKey} onToken={setTurnstileToken} />
+                  {masterCaptchaRequired && (
+                    <CaptchaField key={captchaNonce} onChange={handleCaptchaChange} />
                   )}
                   <div className="flex items-center gap-2">
                     <Input
@@ -592,9 +602,6 @@ export default function AuthGuard({ children }: AuthGuardProps) {
                     onChange={e => setPassword(e.target.value)}
                     className="h-11 rounded-full"
                   />
-                  {siteClosed && (
-                    <TurnstileWidget key={turnstileNonce} siteKey={turnstileSiteKey} onToken={setTurnstileToken} />
-                  )}
                   <Button
                     ref={buttonRef}
                     className="h-11 w-full rounded-full"
@@ -674,7 +681,7 @@ export default function AuthGuard({ children }: AuthGuardProps) {
                       className="h-11 rounded-full"
                     />
                   )}
-                  <TurnstileWidget key={turnstileNonce} siteKey={turnstileSiteKey} onToken={setTurnstileToken} />
+                  <CaptchaField key={captchaNonce} onChange={handleCaptchaChange} />
                   <Button
                     ref={buttonRef}
                     className="h-11 w-full rounded-full"

@@ -20,14 +20,15 @@ import {
   readJson,
   validatePassword,
   validateUsername,
-  verifyTurnstile,
+  verifyCaptchaChallenge,
   type PagesContext,
 } from '../../_lib/auth'
 
 interface RegisterBody {
   username?: unknown
   password?: unknown
-  turnstileToken?: string
+  captchaId?: unknown
+  captchaCode?: unknown
   inviteCode?: unknown
 }
 
@@ -66,8 +67,8 @@ export const onRequest = async (context: PagesContext) => {
   if (!username) return json({ error: '用户名需 3-24 位，仅限文字、数字、下划线、连字符' }, 400)
   if (!password) return json({ error: '密码需 6-64 位' }, 400)
 
-  if (!(await verifyTurnstile(context.env, body?.turnstileToken))) {
-    return json({ error: '人机验证未通过，请重试' }, 400)
+  if (!(await verifyCaptchaChallenge(db, body?.captchaId, body?.captchaCode))) {
+    return json({ error: '验证码错误或已过期，请重新输入' }, 400)
   }
 
   // 仅邀请模式：先验邀请码（无效/用完/过期一律拒绝），建号成功后再核销次数

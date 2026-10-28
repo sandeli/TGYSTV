@@ -85,7 +85,6 @@ describe('fetchAuthConfig', () => {
         json: async () => ({
           authEnabled: true,
           registrationOpen: true,
-          turnstileSiteKey: '',
           announcement: null,
           announcementBar: '',
           doubanProxy: { dataType: 'direct', dataUrl: '', imageType: 'server', imageUrl: '' },

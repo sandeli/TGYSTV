@@ -11,8 +11,8 @@ import {
   nowSeconds,
   readJson,
   recordLoginFailure,
+  verifyCaptchaChallenge,
   verifyPassword,
-  verifyTurnstile,
   type PagesContext,
   type SessionUser,
 } from '../../_lib/auth'
@@ -20,7 +20,8 @@ import {
 interface LoginBody {
   username?: unknown
   password?: unknown
-  turnstileToken?: unknown
+  captchaId?: unknown
+  captchaCode?: unknown
 }
 
 export const onRequest = async (context: PagesContext) => {
@@ -46,11 +47,10 @@ export const onRequest = async (context: PagesContext) => {
     // 站长登录：用户名 admin + 环境变量 TGYS_ACCESS_PASSWORD
     const masterPassword = context.env.TGYS_ACCESS_PASSWORD ?? ''
     if (!masterPassword) return json({ error: '站长登录未启用' }, 403)
-    // 站长登录在所有模式下都必须先过人机验证（防爆破站长密码）；
-    // 未配置 Turnstile 密钥时 verifyTurnstile 直接放行
-    const token = typeof body?.turnstileToken === 'string' ? body.turnstileToken : undefined
-    if (!(await verifyTurnstile(context.env, token))) {
-      return json({ error: '人机验证失败，请重试' }, 403)
+    // 站长登录在所有模式下都必须先过数字验证码（防爆破站长密码；
+    // 本站自托管出题校验，不依赖 Cloudflare Turnstile 的第三方服务）
+    if (!(await verifyCaptchaChallenge(db, body?.captchaId, body?.captchaCode))) {
+      return json({ error: '验证码错误或已过期，请重新输入' }, 403)
     }
     // 失败锁定（按 IP 计数，不会误伤其他网络的站长本人）：
     // 同一 IP 15 分钟内站长登录失败满 5 次 → 该 IP 锁定 10 分钟

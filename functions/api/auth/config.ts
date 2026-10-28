@@ -52,7 +52,6 @@ export const onRequest = async (context: PagesContext) => {
       registrationOpenAt: 0,
       registrationCloseAt: 0,
       registrationFull: false,
-      turnstileSiteKey: '',
       announcement: null,
       announcementBar: '',
       doubanProxy: DEFAULT_DOUBAN_PROXY,
@@ -84,7 +83,6 @@ export const onRequest = async (context: PagesContext) => {
     registrationOpenAt: parseRegistrationTimestamp(get('registration_open_at')),
     registrationCloseAt: parseRegistrationTimestamp(get('registration_close_at')),
     registrationFull: full,
-    turnstileSiteKey: context.env.TGYS_TURNSTILE_SITE_KEY ?? '',
     announcement: {
       enabled: get('announcement_popup_enabled') === '1',
       content: get('announcement_popup_content') ?? '',

@@ -18,6 +18,11 @@ import {
   clearLoginFailures,
   getLoginLockSeconds,
   recordLoginFailure,
+  buildCaptchaSvg,
+  createCaptchaChallenge,
+  generateCaptchaCode,
+  nowSeconds,
+  verifyCaptchaChallenge,
   readSiteBehavior,
   getSettings,
   parseSiteBehavior,
@@ -538,5 +543,93 @@ describe('账号源已删名单（防复活）', () => {
     const meta = await getUserSourcesMeta(db, 9)
     expect(meta.sources.map(s => s.id)).toEqual(['a'])
     expect(meta.deletedIds).toEqual(['b'])
+  })
+})
+
+/** captcha_challenges 的内存假实现：按 SQL 关键字分发 first/run */
+function fakeCaptchaDb() {
+  const rows = new Map<string, { codeHash: string; expiresAt: number }>()
+  const db = {
+    prepare: (sql: string) => ({
+      bind: (...args: unknown[]) => ({
+        first: async () => {
+          if (!sql.includes('FROM captcha_challenges')) return null
+          const row = rows.get(String(args[0]))
+          return row ? { codeHash: row.codeHash, expiresAt: row.expiresAt } : null
+        },
+        run: async () => {
+          if (sql.includes('INSERT INTO captcha_challenges')) {
+            const [id, codeHash, expiresAt] = args as [string, string, number, number]
+            rows.set(id, { codeHash, expiresAt })
+          } else if (sql.includes('DELETE FROM captcha_challenges WHERE id')) {
+            rows.delete(String(args[0]))
+          }
+          return { success: true }
+        },
+      }),
+    }),
+  } as unknown as D1Database
+  return { db, rows }
+}
+
+/** 从存储的答案哈希反推验证码明文（测试用：遍历 0000-9999 比对哈希） */
+async function recoverCaptchaCode(id: string, codeHash: string): Promise<string> {
+  for (let n = 0; n < 10_000; n++) {
+    const candidate = String(n).padStart(4, '0')
+    if ((await sha256Hex(`${id}:${candidate}`)) === codeHash) return candidate
+  }
+  throw new Error('未能反推验证码')
+}
+
+describe('数字验证码', () => {
+  it('生成的验证码恒为 4 位数字', () => {
+    for (let i = 0; i < 50; i++) {
+      expect(generateCaptchaCode()).toMatch(/^\d{4}$/)
+    }
+  })
+
+  it('SVG 图片包含验证码的每一位数字，且同 seed 输出确定', () => {
+    const svg = buildCaptchaSvg('5820', 42)
+    expect(svg.startsWith('<svg')).toBe(true)
+    for (const digit of ['5', '8', '2', '0']) {
+      expect(svg).toContain(`>${digit}<`)
+    }
+    expect(buildCaptchaSvg('5820', 42)).toBe(svg)
+    expect(buildCaptchaSvg('5820', 7)).not.toBe(svg)
+  })
+
+  it('出题→答对通过，且题目一次性（再验即失败）', async () => {
+    const { db, rows } = fakeCaptchaDb()
+    const challenge = await createCaptchaChallenge(db)
+    expect(challenge.id).toMatch(/^[0-9a-f]{32}$/)
+    expect(challenge.image.startsWith('<svg')).toBe(true)
+    const row = rows.get(challenge.id)
+    expect(row).toBeDefined()
+    const code = await recoverCaptchaCode(challenge.id, row!.codeHash)
+    expect(await verifyCaptchaChallenge(db, challenge.id, code)).toBe(true)
+    expect(await verifyCaptchaChallenge(db, challenge.id, code)).toBe(false)
+  })
+
+  it('答错即消费题目：之后拿正确答案也进不去', async () => {
+    const { db, rows } = fakeCaptchaDb()
+    const challenge = await createCaptchaChallenge(db)
+    const code = await recoverCaptchaCode(challenge.id, rows.get(challenge.id)!.codeHash)
+    const wrong = String((Number.parseInt(code, 10) + 1) % 10_000).padStart(4, '0')
+    expect(await verifyCaptchaChallenge(db, challenge.id, wrong)).toBe(false)
+    expect(await verifyCaptchaChallenge(db, challenge.id, code)).toBe(false)
+  })
+
+  it('过期题目拒绝；格式不对与未知题目直接拒绝', async () => {
+    const { db, rows } = fakeCaptchaDb()
+    const challenge = await createCaptchaChallenge(db)
+    const row = rows.get(challenge.id)!
+    const code = await recoverCaptchaCode(challenge.id, row.codeHash)
+    rows.set(challenge.id, { codeHash: row.codeHash, expiresAt: nowSeconds() - 1 })
+    expect(await verifyCaptchaChallenge(db, challenge.id, code)).toBe(false)
+
+    expect(await verifyCaptchaChallenge(db, 'not-an-id', '1234')).toBe(false)
+    expect(await verifyCaptchaChallenge(db, challenge.id, '12a4')).toBe(false)
+    expect(await verifyCaptchaChallenge(db, 'f'.repeat(32), '1234')).toBe(false)
+    expect(await verifyCaptchaChallenge(db, undefined, undefined)).toBe(false)
   })
 })
