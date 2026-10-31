@@ -57,6 +57,16 @@ const formatDate = (dateStr: string) => {
 // 版本更新历史
 const VERSION_UPDATES: VersionUpdate[] = [
   {
+    version: '2.38.1',
+    title: '站点图标换成红尾巴新版',
+    date: formatDate('2026-10-31'),
+    features: [
+      '站点图标与 TGYSTV App 统一：深蓝狮子加朱红尾巴、雾蓝浅底，浏览器标签页图标、手机添加到主屏幕的图标都换成这一版，和 App 桌面图标长一个样。',
+    ],
+    fixes: [],
+    breaking: [],
+  },
+  {
     version: '2.38.0',
     title: '人机验证改成本站数字验证码',
     date: formatDate('2026-10-28'),
