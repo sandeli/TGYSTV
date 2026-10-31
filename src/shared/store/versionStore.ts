@@ -57,6 +57,16 @@ const formatDate = (dateStr: string) => {
 // 版本更新历史
 const VERSION_UPDATES: VersionUpdate[] = [
   {
+    version: '2.38.2',
+    title: '站点图标只保留红尾巴',
+    date: formatDate('2026-10-31'),
+    features: [],
+    fixes: [
+      '站点图标按站长意见改回原来的白底黑狮，只把尾巴换成朱红色（与 App 图标的红尾巴同色）；上一版的雾蓝底、深蓝狮身不保留。',
+    ],
+    breaking: [],
+  },
+  {
     version: '2.38.1',
     title: '站点图标换成红尾巴新版',
     date: formatDate('2026-10-31'),
